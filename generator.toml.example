@@ -37,6 +37,17 @@ cache_ttl = 60
 # When enabled, displays added/removed outbounds compared to the cached version
 diff_subscription = false
 
+# Automatically upload generated config files to cloud storage services that support WebDAV protocol
+# Enable upload
+webdav_upload = false
+# WebDAV server URL
+webdav_url = "https://example.com/dav"
+# WebDAV authentication
+webdav_username = "example"
+webdav_password = "123456"
+# Remote path where the config will be uploaded
+upload_path = "/path/to/upload"
+
 # Subscriptions (required - at least one)
 [[subscriptions]]
 name = "MyProvider"

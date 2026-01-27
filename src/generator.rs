@@ -17,6 +17,7 @@ use crate::transform::{
     generate_country_code_selectors_filtered, generate_detour_selector,
     generate_subscription_selector, get_outbound_tag, update_selectors_with_new_tags,
 };
+use crate::webdav::{WebDavConfig, upload_to_webdav};
 
 // ============================================================================
 // Generator Config Types
@@ -69,6 +70,26 @@ pub struct GeneratorConfig {
     /// Show diff between newly fetched subscription and cached version
     #[serde(default)]
     pub diff_subscription: bool,
+
+    /// Enable WebDAV upload
+    #[serde(default)]
+    pub webdav_upload: bool,
+
+    /// WebDAV server URL (e.g., "https://example.com/dav")
+    #[serde(default)]
+    pub webdav_url: String,
+
+    /// WebDAV username for authentication
+    #[serde(default)]
+    pub webdav_username: String,
+
+    /// WebDAV password for authentication
+    #[serde(default)]
+    pub webdav_password: String,
+
+    /// Remote path where the config will be uploaded (e.g., "/path/to/config.json")
+    #[serde(default)]
+    pub upload_path: String,
 
     /// Subscriptions list (required - at least one)
     pub subscriptions: Vec<Subscription>,
@@ -138,7 +159,21 @@ impl GeneratorConfig {
             anyhow::anyhow!("Invalid target_version: {}: {}", config.target_version, e)
         })?;
 
+        // Validate WebDAV config if enabled
+        config.get_webdav_config().validate()?;
+
         Ok(config)
+    }
+
+    /// Get the WebDAV configuration from generator config fields
+    pub fn get_webdav_config(&self) -> WebDavConfig {
+        WebDavConfig {
+            webdav_upload: self.webdav_upload,
+            webdav_url: self.webdav_url.clone(),
+            webdav_username: self.webdav_username.clone(),
+            webdav_password: self.webdav_password.clone(),
+            upload_path: self.upload_path.clone(),
+        }
     }
 
     /// Get the parsed target version.
@@ -386,6 +421,13 @@ impl Generator {
             .with_context(|| format!("Failed to write config to {:?}", path))?;
 
         info!("Config written to {:?}", path);
+
+        // Upload to WebDAV if configured
+        let webdav_config = self.config.get_webdav_config();
+        if webdav_config.is_configured() {
+            upload_to_webdav(&webdav_config, &json).await?;
+        }
+
         Ok(())
     }
 
@@ -442,13 +484,12 @@ impl Generator {
             return false;
         }
 
-        if let Ok(metadata) = std::fs::metadata(cache_path) {
-            if let Ok(modified) = metadata.modified() {
-                let ttl = Duration::from_secs(self.config.cache_ttl * 60);
-                if let Ok(elapsed) = SystemTime::now().duration_since(modified) {
-                    return elapsed < ttl;
-                }
-            }
+        if let Ok(metadata) = std::fs::metadata(cache_path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(elapsed) = SystemTime::now().duration_since(modified)
+        {
+            let ttl = Duration::from_secs(self.config.cache_ttl * 60);
+            return elapsed < ttl;
         }
         false
     }
@@ -632,10 +673,10 @@ impl Generator {
                     }
 
                     // Save to cache if caching is enabled (before filtering)
-                    if self.config.cache_subscription {
-                        if let Err(e) = self.save_to_cache(&cache_path, &outbounds).await {
-                            warn!("Failed to save cache for '{}': {}", sub.name, e);
-                        }
+                    if self.config.cache_subscription
+                        && let Err(e) = self.save_to_cache(&cache_path, &outbounds).await
+                    {
+                        warn!("Failed to save cache for '{}': {}", sub.name, e);
                     }
 
                     // Apply filter if specified
@@ -1504,5 +1545,123 @@ url = "https://example.com/sub3"
         assert_eq!(config.subscriptions[0].filter, vec![0]);
         assert_eq!(config.subscriptions[1].filter, vec![1, 2, 3]);
         assert!(config.subscriptions[2].filter.is_empty());
+    }
+
+    // ========================================================================
+    // WebDAV Configuration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_webdav_config_enabled() {
+        let toml = r#"
+template = "./template.json"
+webdav_upload = true
+webdav_url = "https://example.com/dav"
+webdav_username = "user"
+webdav_password = "secret"
+upload_path = "/configs/sing-box.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.webdav_upload);
+        assert_eq!(config.webdav_url, "https://example.com/dav");
+        assert_eq!(config.webdav_username, "user");
+        assert_eq!(config.webdav_password, "secret");
+        assert_eq!(config.upload_path, "/configs/sing-box.json");
+
+        // Test get_webdav_config method
+        let webdav_config = config.get_webdav_config();
+        assert!(webdav_config.webdav_upload);
+        assert_eq!(webdav_config.webdav_url, "https://example.com/dav");
+        assert!(webdav_config.is_configured());
+    }
+
+    #[test]
+    fn test_parse_webdav_config_default_disabled() {
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        assert!(!config.webdav_upload);
+        assert!(config.webdav_url.is_empty());
+        assert!(config.webdav_username.is_empty());
+        assert!(config.webdav_password.is_empty());
+        assert!(config.upload_path.is_empty());
+
+        let webdav_config = config.get_webdav_config();
+        assert!(!webdav_config.is_configured());
+    }
+
+    #[test]
+    fn test_parse_webdav_config_missing_url_fails() {
+        let toml = r#"
+template = "./template.json"
+webdav_upload = true
+upload_path = "/configs/sing-box.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let result = GeneratorConfig::from_toml(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("WebDAV URL is required"));
+    }
+
+    #[test]
+    fn test_parse_webdav_config_missing_path_fails() {
+        let toml = r#"
+template = "./template.json"
+webdav_upload = true
+webdav_url = "https://example.com/dav"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let result = GeneratorConfig::from_toml(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Upload path is required"));
+    }
+
+    #[test]
+    fn test_parse_webdav_config_invalid_url_fails() {
+        let toml = r#"
+template = "./template.json"
+webdav_upload = true
+webdav_url = "ftp://example.com/dav"
+upload_path = "/configs/sing-box.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let result = GeneratorConfig::from_toml(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("must start with http://"));
+    }
+
+    #[test]
+    fn test_parse_webdav_config_without_auth() {
+        let toml = r#"
+template = "./template.json"
+webdav_upload = true
+webdav_url = "https://example.com/dav"
+upload_path = "/configs/sing-box.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.webdav_upload);
+        assert!(config.webdav_username.is_empty());
+        assert!(config.webdav_password.is_empty());
+
+        let webdav_config = config.get_webdav_config();
+        assert!(webdav_config.is_configured());
     }
 }

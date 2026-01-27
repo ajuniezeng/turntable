@@ -252,10 +252,10 @@ pub fn generate_detour_selector(
     // Update all outbounds with detour to point to the new selector
     let mut updated_count = 0;
     for outbound in outbounds.iter_mut() {
-        if get_outbound_detour(outbound).is_some() {
-            if set_outbound_detour(outbound, DETOUR_SELECTOR_TAG) {
-                updated_count += 1;
-            }
+        if get_outbound_detour(outbound).is_some()
+            && set_outbound_detour(outbound, DETOUR_SELECTOR_TAG)
+        {
+            updated_count += 1;
         }
     }
 

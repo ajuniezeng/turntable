@@ -175,11 +175,11 @@ fn is_base64_content(content: &str) -> bool {
     }
 
     // Try to decode and see if it looks like URIs
-    if let Ok(decoded) = decode_base64(&cleaned) {
-        if let Ok(decoded_str) = String::from_utf8(decoded) {
-            // Check if decoded content contains proxy URIs
-            return decoded_str.lines().any(|line| is_proxy_uri(line.trim()));
-        }
+    if let Ok(decoded) = decode_base64(&cleaned)
+        && let Ok(decoded_str) = String::from_utf8(decoded)
+    {
+        // Check if decoded content contains proxy URIs
+        return decoded_str.lines().any(|line| is_proxy_uri(line.trim()));
     }
 
     false
@@ -233,7 +233,7 @@ pub fn decode_base64(content: &str) -> Result<Vec<u8>> {
 /// Adds proper padding to Base64 string if missing
 fn add_base64_padding(s: &str) -> String {
     let mut result = s.to_string();
-    while result.len() % 4 != 0 {
+    while !result.len().is_multiple_of(4) {
         result.push('=');
     }
     result
@@ -632,14 +632,13 @@ impl ShadowsocksParser {
     /// Parses userinfo which can be Base64(method:password) or method:password
     fn parse_userinfo(&self, userinfo: &str) -> Result<(String, String)> {
         // First try to decode as Base64
-        if let Ok(decoded) = decode_base64(userinfo) {
-            if let Ok(decoded_str) = String::from_utf8(decoded) {
-                if let Some(colon_pos) = decoded_str.find(':') {
-                    let method = decoded_str[..colon_pos].to_string();
-                    let password = decoded_str[colon_pos + 1..].to_string();
-                    return Ok((method, password));
-                }
-            }
+        if let Ok(decoded) = decode_base64(userinfo)
+            && let Ok(decoded_str) = String::from_utf8(decoded)
+            && let Some(colon_pos) = decoded_str.find(':')
+        {
+            let method = decoded_str[..colon_pos].to_string();
+            let password = decoded_str[colon_pos + 1..].to_string();
+            return Ok((method, password));
         }
 
         // Try as plain method:password (URL-decoded)
@@ -803,10 +802,10 @@ impl VMessParser {
         match json.net.as_deref() {
             Some("ws") | Some("websocket") => {
                 let mut headers = HashMap::new();
-                if let Some(host) = &json.host {
-                    if !host.is_empty() {
-                        headers.insert("Host".to_string(), host.clone());
-                    }
+                if let Some(host) = &json.host
+                    && !host.is_empty()
+                {
+                    headers.insert("Host".to_string(), host.clone());
                 }
 
                 Some(V2RayTransport::WebSocket(WebSocketTransport {
@@ -927,10 +926,10 @@ impl VLessParser {
         match params.get("type").map(|s| s.as_str()) {
             Some("ws") | Some("websocket") => {
                 let mut headers = HashMap::new();
-                if let Some(host) = params.get("host") {
-                    if !host.is_empty() {
-                        headers.insert("Host".to_string(), host.clone());
-                    }
+                if let Some(host) = params.get("host")
+                    && !host.is_empty()
+                {
+                    headers.insert("Host".to_string(), host.clone());
                 }
 
                 Some(V2RayTransport::WebSocket(WebSocketTransport {
@@ -1040,10 +1039,10 @@ impl TrojanParser {
         match params.get("type").map(|s| s.as_str()) {
             Some("ws") | Some("websocket") => {
                 let mut headers = HashMap::new();
-                if let Some(host) = params.get("host") {
-                    if !host.is_empty() {
-                        headers.insert("Host".to_string(), host.clone());
-                    }
+                if let Some(host) = params.get("host")
+                    && !host.is_empty()
+                {
+                    headers.insert("Host".to_string(), host.clone());
                 }
 
                 Some(V2RayTransport::WebSocket(WebSocketTransport {
