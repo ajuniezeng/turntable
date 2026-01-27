@@ -51,6 +51,14 @@ pub enum ConfigError {
         outbound: String,
     },
 
+    /// Selector default references a non-existent outbound.
+    SelectorDefaultOutboundNotFound {
+        /// The selector outbound tag.
+        selector: String,
+        /// The referenced default outbound tag that was not found.
+        outbound: String,
+    },
+
     /// DNS rule references a non-existent DNS server.
     DnsServerNotFound {
         /// The rule index (0-based).
@@ -252,6 +260,12 @@ impl fmt::Display for ConfigError {
                 write!(
                     f,
                     "selector '{selector}' references non-existent outbound '{outbound}'"
+                )
+            }
+            Self::SelectorDefaultOutboundNotFound { selector, outbound } => {
+                write!(
+                    f,
+                    "selector '{selector}' default references non-existent outbound '{outbound}'"
                 )
             }
             Self::DnsServerNotFound { rule_index, server } => {
@@ -633,6 +647,15 @@ impl SingBoxConfig {
                                 outbound: referenced.clone(),
                             });
                         }
+                    }
+                    // Check default outbound reference
+                    if let Some(default) = &selector.default
+                        && !outbound_tags.contains(default)
+                    {
+                        result.add_error(ConfigError::SelectorDefaultOutboundNotFound {
+                            selector: selector_tag.clone(),
+                            outbound: default.clone(),
+                        });
                     }
                 }
                 Outbound::UrlTest(urltest) => {
@@ -1377,6 +1400,28 @@ mod tests {
     }
 
     #[test]
+    fn test_selector_default_outbound_not_found() {
+        let mut selector = SelectorOutbound::new("select", vec!["direct".to_string()]);
+        selector.default = Some("nonexistent".to_string());
+
+        let config = SingBoxConfig {
+            outbounds: vec![
+                Outbound::Direct(DirectOutbound::new("direct")),
+                Outbound::Selector(selector),
+            ],
+            ..Default::default()
+        };
+
+        let result = config.validate();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| matches!(
+            e,
+            ConfigError::SelectorDefaultOutboundNotFound { selector, outbound }
+                if selector == "select" && outbound == "nonexistent"
+        )));
+    }
+
+    #[test]
     fn test_outbound_circular_reference() {
         // Create outbound a -> b -> c -> a
         let mut outbound_a = SocksOutbound::new("a", "127.0.0.1", 1080);
@@ -1458,6 +1503,7 @@ mod tests {
             dns: Some(Dns {
                 servers: vec![DnsServer::Local(LocalDnsServer {
                     tag: "local".to_string(),
+                    ..Default::default()
                 })],
                 rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
                     outbound: vec!["nonexistent".to_string()],
@@ -1483,6 +1529,7 @@ mod tests {
             dns: Some(Dns {
                 servers: vec![DnsServer::Local(LocalDnsServer {
                     tag: "local".to_string(),
+                    ..Default::default()
                 })],
                 r#final: Some("nonexistent".to_string()),
                 ..Default::default()
@@ -1505,6 +1552,7 @@ mod tests {
                 servers: vec![
                     DnsServer::Local(LocalDnsServer {
                         tag: "dns".to_string(),
+                        ..Default::default()
                     }),
                     DnsServer::Udp(UdpDnsServer {
                         tag: "dns".to_string(),
@@ -1753,6 +1801,7 @@ mod tests {
                 servers: vec![
                     DnsServer::Local(LocalDnsServer {
                         tag: "local".to_string(),
+                        ..Default::default()
                     }),
                     DnsServer::Udp(UdpDnsServer {
                         tag: "google".to_string(),

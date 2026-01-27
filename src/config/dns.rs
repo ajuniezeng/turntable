@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::config::shared::DialFields;
 use crate::config::util::{is_false, string_or_vec};
 
 /// DNS configuration for sing-box
@@ -140,6 +141,13 @@ pub struct LegacyDnsServer {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct LocalDnsServer {
     pub tag: String,
+
+    /// When enabled, local DNS server will resolve DNS by dialing itself whenever possible (since 1.13.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub prefer_go: bool,
+
+    #[serde(flatten)]
+    pub dial: DialFields,
 }
 
 /// Hosts file based DNS server
@@ -147,61 +155,13 @@ pub struct LocalDnsServer {
 pub struct HostsDnsServer {
     pub tag: String,
 
-    /// Path to hosts file
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
+    /// Paths to hosts files (defaults to system hosts file)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
 
     /// Predefined hosts entries
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predefined: Option<HashMap<String, Vec<String>>>,
-}
-
-/// Common dial fields for DNS servers
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct DialFields {
-    /// Detour outbound tag
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detour: Option<String>,
-
-    /// Bind interface
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bind_interface: Option<String>,
-
-    /// Bind IPv4 address
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inet4_bind_address: Option<String>,
-
-    /// Bind IPv6 address
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inet6_bind_address: Option<String>,
-
-    /// Domain resolver tag
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain_resolver: Option<String>,
-
-    /// Domain resolution strategy
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain_strategy: Option<Strategy>,
-
-    /// Fallback delay for dual-stack connections
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback_delay: Option<String>,
-
-    /// Connect timeout
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connect_timeout: Option<String>,
-
-    /// TCP fast open
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub tcp_fast_open: bool,
-
-    /// TCP multi-path
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub tcp_multi_path: bool,
-
-    /// UDP fragment
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub udp_fragment: bool,
 }
 
 /// DNS over TCP server
@@ -384,18 +344,36 @@ pub struct DhcpDnsServer {
     /// Network interface (e.g., "en0", "auto")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+
+    #[serde(flatten)]
+    pub dial: DialFields,
 }
 
 /// FakeIP DNS server
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct FakeIpDnsServer {
     pub tag: String,
+
+    /// IPv4 address range for FakeIP
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inet4_range: Option<String>,
+
+    /// IPv6 address range for FakeIP
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inet6_range: Option<String>,
 }
 
 /// Tailscale DNS server
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TailscaleDnsServer {
     pub tag: String,
+
+    /// The tag of the Tailscale Endpoint (required)
+    pub endpoint: String,
+
+    /// Accept default DNS resolvers for fallback queries in addition to MagicDNS
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accept_default_resolvers: bool,
 }
 
 /// Resolved DNS server
@@ -403,9 +381,12 @@ pub struct TailscaleDnsServer {
 pub struct ResolvedDnsServer {
     pub tag: String,
 
-    /// Resolved addresses
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub addresses: Vec<String>,
+    /// The tag of the Resolved Service (required)
+    pub service: String,
+
+    /// Accept default DNS resolvers for fallback queries in addition to matching domains
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accept_default_resolvers: bool,
 }
 
 /// FakeIP configuration (deprecated in 1.12.0)
