@@ -9,6 +9,7 @@ use crate::config::SingBoxConfig;
 use crate::config::dns::{Dns, Strategy};
 use crate::config::outbound::Outbound;
 use crate::config::version::{LATEST_VERSION, SingBoxVersion};
+use crate::parser::{SubscriptionType, detect_subscription_type, parse_subscription};
 use crate::transform::{
     filter_ipv6_outbounds, generate_country_code_selectors_filtered,
     generate_subscription_selector, get_outbound_tag, update_selectors_with_new_tags,
@@ -335,9 +336,18 @@ impl Generator {
     /// Returns a vector of (subscription_name, outbounds) tuples.
     async fn fetch_subscriptions_with_names(&self) -> Result<Vec<(String, Vec<Outbound>)>> {
         let mut results = Vec::new();
+        let total_subscriptions = self.config.subscriptions.len();
 
-        for sub in &self.config.subscriptions {
-            info!("Fetching subscription: {}", sub.name);
+        debug!("Starting to fetch {} subscription(s)", total_subscriptions);
+
+        for (index, sub) in self.config.subscriptions.iter().enumerate() {
+            info!(
+                "Fetching subscription [{}/{}]: '{}' from {}",
+                index + 1,
+                total_subscriptions,
+                sub.name,
+                sub.url
+            );
 
             match self.fetch_singbox_subscription(&sub.url).await {
                 Ok(outbounds) => {
@@ -346,26 +356,69 @@ impl Generator {
                         sub.name,
                         outbounds.len()
                     );
+                    for outbound in &outbounds {
+                        let tag = crate::transform::get_outbound_tag(outbound)
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "<no tag>".to_string());
+                        debug!("  - {}: {}", sub.name, tag);
+                    }
                     results.push((sub.name.clone(), outbounds));
                 }
                 Err(e) => {
                     // Log error but continue with other subscriptions
-                    tracing::warn!("Failed to fetch subscription '{}': {}", sub.name, e);
+                    warn!("Failed to fetch subscription '{}': {}", sub.name, e);
+                    debug!("Error details for '{}': {:?}", sub.name, e);
                 }
             }
         }
 
+        let total_outbounds: usize = results.iter().map(|(_, o)| o.len()).sum();
+        debug!(
+            "Subscription fetching complete: {} subscription(s) successful, {} total outbounds",
+            results.len(),
+            total_outbounds
+        );
+
         Ok(results)
     }
 
-    /// Fetch a sing-box format subscription
+    /// Fetch and parse a subscription, automatically detecting the format
     async fn fetch_singbox_subscription(&self, url: &str) -> Result<Vec<Outbound>> {
+        debug!("Fetching subscription content from: {}", url);
         let content = fetch_text(url).await?;
+        debug!(
+            "Received {} bytes of content from subscription",
+            content.len()
+        );
 
-        let subscription: SingBoxSubscription = serde_json::from_str(&content)
-            .context("Failed to parse subscription as sing-box format")?;
+        let subscription_type = detect_subscription_type(&content);
+        debug!(
+            "Detected subscription type: {} for URL: {}",
+            subscription_type, url
+        );
 
-        Ok(subscription.outbounds)
+        match subscription_type {
+            SubscriptionType::Unknown => {
+                let preview: String = content.chars().take(200).collect();
+                debug!("Content preview for unknown format: {:?}", preview);
+                anyhow::bail!("Unable to detect subscription format for URL: {}", url)
+            }
+            SubscriptionType::ClashYaml => {
+                debug!("Clash YAML detected but not supported");
+                anyhow::bail!("Clash YAML format is not yet supported for URL: {}", url)
+            }
+            _ => {
+                debug!("Starting subscription parsing...");
+                let outbounds = parse_subscription(&content)
+                    .with_context(|| format!("Failed to parse subscription from: {}", url))?;
+                debug!(
+                    "Successfully parsed {} outbounds from {}",
+                    outbounds.len(),
+                    url
+                );
+                Ok(outbounds)
+            }
+        }
     }
 }
 

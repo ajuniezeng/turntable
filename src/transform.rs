@@ -355,7 +355,6 @@ mod tests {
     use crate::config::outbound::{
         DirectOutbound, ShadowsocksOutbound, SocksOutbound, UrlTestOutbound,
     };
-    use std::collections::HashSet;
 
     // ------------------------------------------------------------------------
     // IPv6 Filtering Tests

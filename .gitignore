@@ -4,5 +4,7 @@
 .DS_STORE
 
 generator.toml
+/out
+/examples
 
 sing_box_docs
