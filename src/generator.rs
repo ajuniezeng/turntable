@@ -1,5 +1,7 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,18 @@ pub struct GeneratorConfig {
     #[serde(default)]
     pub detour_selector: bool,
 
+    /// Cache every subscription as a single sing-box outbound format json file in output directory
+    #[serde(default)]
+    pub cache_subscription: bool,
+
+    /// Cache time to live in minutes. Ignored when `cache_subscription` is false.
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl: u64,
+
+    /// Show diff between newly fetched subscription and cached version
+    #[serde(default)]
+    pub diff_subscription: bool,
+
     /// Subscriptions list (required - at least one)
     pub subscriptions: Vec<Subscription>,
 }
@@ -85,6 +99,10 @@ fn default_target_version() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_cache_ttl() -> u64 {
+    60
 }
 
 // ============================================================================
@@ -392,6 +410,159 @@ impl Generator {
         Ok(config)
     }
 
+    /// Get the cache directory path (same directory as output file)
+    fn get_cache_dir(&self) -> PathBuf {
+        let output_path = Path::new(&self.config.output);
+        output_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Get the cache file path for a subscription
+    fn get_cache_path(&self, subscription_name: &str) -> PathBuf {
+        let cache_dir = self.get_cache_dir();
+        // Sanitize subscription name for use as filename
+        let safe_name: String = subscription_name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        cache_dir.join(format!("{}.cache.json", safe_name))
+    }
+
+    /// Check if a cached subscription is still valid (within TTL)
+    fn is_cache_valid(&self, cache_path: &Path) -> bool {
+        if !self.config.cache_subscription {
+            return false;
+        }
+
+        if let Ok(metadata) = std::fs::metadata(cache_path) {
+            if let Ok(modified) = metadata.modified() {
+                let ttl = Duration::from_secs(self.config.cache_ttl * 60);
+                if let Ok(elapsed) = SystemTime::now().duration_since(modified) {
+                    return elapsed < ttl;
+                }
+            }
+        }
+        false
+    }
+
+    /// Load outbounds from cache file
+    async fn load_from_cache(&self, cache_path: &Path) -> Result<Vec<Outbound>> {
+        let content = tokio::fs::read_to_string(cache_path)
+            .await
+            .with_context(|| format!("Failed to read cache file: {}", cache_path.display()))?;
+
+        let subscription: SingBoxSubscription = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse cache file: {}", cache_path.display()))?;
+
+        Ok(subscription.outbounds)
+    }
+
+    /// Load outbounds from cache file if it exists (regardless of TTL)
+    /// Used for diffing purposes
+    async fn load_from_cache_if_exists(&self, cache_path: &Path) -> Option<Vec<Outbound>> {
+        if !cache_path.exists() {
+            return None;
+        }
+
+        match tokio::fs::read_to_string(cache_path).await {
+            Ok(content) => match serde_json::from_str::<SingBoxSubscription>(&content) {
+                Ok(subscription) => Some(subscription.outbounds),
+                Err(e) => {
+                    debug!("Failed to parse cache file for diff: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                debug!("Failed to read cache file for diff: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Save outbounds to cache file
+    async fn save_to_cache(&self, cache_path: &Path, outbounds: &[Outbound]) -> Result<()> {
+        // Ensure cache directory exists
+        if let Some(parent) = cache_path.parent() {
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!("Failed to create cache directory: {}", parent.display())
+            })?;
+        }
+
+        let subscription = SingBoxSubscription {
+            outbounds: outbounds.to_vec(),
+        };
+
+        let content = serde_json::to_string_pretty(&subscription)
+            .context("Failed to serialize outbounds for cache")?;
+
+        tokio::fs::write(cache_path, content)
+            .await
+            .with_context(|| format!("Failed to write cache file: {}", cache_path.display()))?;
+
+        debug!(
+            "Saved {} outbounds to cache: {}",
+            outbounds.len(),
+            cache_path.display()
+        );
+        Ok(())
+    }
+
+    /// Diff two sets of outbounds and log the differences
+    fn diff_outbounds(&self, subscription_name: &str, old: &[Outbound], new: &[Outbound]) {
+        use crate::transform::get_outbound_tag;
+
+        let old_tags: HashSet<String> = old
+            .iter()
+            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+            .collect();
+
+        let new_tags: HashSet<String> = new
+            .iter()
+            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+            .collect();
+
+        let added: Vec<&String> = new_tags.difference(&old_tags).collect();
+        let removed: Vec<&String> = old_tags.difference(&new_tags).collect();
+
+        if added.is_empty() && removed.is_empty() {
+            info!(
+                "Subscription '{}': No changes ({} outbounds)",
+                subscription_name,
+                new_tags.len()
+            );
+            return;
+        }
+
+        info!(
+            "Subscription '{}' changes: +{} added, -{} removed",
+            subscription_name,
+            added.len(),
+            removed.len()
+        );
+
+        if !added.is_empty() {
+            info!("  Added ({}):", added.len());
+            for tag in &added {
+                info!("    + {}", tag);
+            }
+        }
+
+        if !removed.is_empty() {
+            info!("  Removed ({}):", removed.len());
+            for tag in &removed {
+                info!("    - {}", tag);
+            }
+        }
+    }
+
     /// Fetch all subscriptions and collect their outbounds with subscription names.
     ///
     /// Returns a vector of (subscription_name, outbounds) tuples.
@@ -402,6 +573,39 @@ impl Generator {
         debug!("Starting to fetch {} subscription(s)", total_subscriptions);
 
         for (index, sub) in self.config.subscriptions.iter().enumerate() {
+            // Check cache first if caching is enabled
+            let cache_path = self.get_cache_path(&sub.name);
+            let use_cache = self.is_cache_valid(&cache_path);
+
+            if use_cache {
+                info!(
+                    "Loading subscription [{}/{}]: '{}' from cache",
+                    index + 1,
+                    total_subscriptions,
+                    sub.name
+                );
+                match self.load_from_cache(&cache_path).await {
+                    Ok(outbounds) => {
+                        info!(
+                            "Loaded {} outbounds from cache for '{}'",
+                            outbounds.len(),
+                            sub.name
+                        );
+                        results.push((
+                            sub.name.clone(),
+                            self.apply_subscription_filter(sub, outbounds),
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to load cache for '{}': {}, fetching fresh",
+                            sub.name, e
+                        );
+                    }
+                }
+            }
+
             info!(
                 "Fetching subscription [{}/{}]: '{}' from {}",
                 index + 1,
@@ -412,26 +616,30 @@ impl Generator {
 
             match self.fetch_singbox_subscription(&sub.url).await {
                 Ok(outbounds) => {
+                    // Diff with cached version if enabled and cache exists
+                    if self.config.diff_subscription {
+                        if let Some(cached_outbounds) =
+                            self.load_from_cache_if_exists(&cache_path).await
+                        {
+                            self.diff_outbounds(&sub.name, &cached_outbounds, &outbounds);
+                        } else {
+                            info!(
+                                "Subscription '{}': First fetch, {} outbounds",
+                                sub.name,
+                                outbounds.len()
+                            );
+                        }
+                    }
+
+                    // Save to cache if caching is enabled (before filtering)
+                    if self.config.cache_subscription {
+                        if let Err(e) = self.save_to_cache(&cache_path, &outbounds).await {
+                            warn!("Failed to save cache for '{}': {}", sub.name, e);
+                        }
+                    }
+
                     // Apply filter if specified
-                    let outbounds = if sub.filter.is_empty() {
-                        outbounds
-                    } else {
-                        let original_count = outbounds.len();
-                        let filtered: Vec<_> = outbounds
-                            .into_iter()
-                            .enumerate()
-                            .filter(|(i, _)| !sub.filter.contains(i))
-                            .map(|(_, o)| o)
-                            .collect();
-                        debug!(
-                            "Filtered subscription '{}': removed {} outbounds (indices {:?}), {} remaining",
-                            sub.name,
-                            original_count - filtered.len(),
-                            sub.filter,
-                            filtered.len()
-                        );
-                        filtered
-                    };
+                    let outbounds = self.apply_subscription_filter(sub, outbounds);
 
                     info!(
                         "Subscription '{}' returned {} outbounds",
@@ -462,6 +670,33 @@ impl Generator {
         );
 
         Ok(results)
+    }
+
+    /// Apply subscription filter to outbounds
+    fn apply_subscription_filter(
+        &self,
+        sub: &Subscription,
+        outbounds: Vec<Outbound>,
+    ) -> Vec<Outbound> {
+        if sub.filter.is_empty() {
+            outbounds
+        } else {
+            let original_count = outbounds.len();
+            let filtered: Vec<_> = outbounds
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !sub.filter.contains(i))
+                .map(|(_, o)| o)
+                .collect();
+            debug!(
+                "Filtered subscription '{}': removed {} outbounds (indices {:?}), {} remaining",
+                sub.name,
+                original_count - filtered.len(),
+                sub.filter,
+                filtered.len()
+            );
+            filtered
+        }
     }
 
     /// Fetch and parse a subscription, automatically detecting the format
@@ -605,18 +840,21 @@ mod tests {
     use super::*;
 
     const EXAMPLE_GENERATOR_TOML: &str = r#"
-template = "./templates/1.13.json"
-output = "./out/config.json"
-ipv4_only = false
-target_version = "1.13"
-country_code_outbound_selectors = true
-no_detour = false
-detour_selector = false
+    template = "./templates/1.13.json"
+    output = "./out/config.json"
+    ipv4_only = false
+    target_version = "1.13"
+    country_code_outbound_selectors = true
+    no_detour = false
+    detour_selector = false
+    cache_subscription = false
+    cache_ttl = 60
+    diff_subscription = false
 
-[[subscriptions]]
-name = "MyProvider"
-url = "https://example.com/subscription-url"
-"#;
+    [[subscriptions]]
+    name = "MyProvider"
+    url = "https://example.com/subscription-url"
+    "#;
 
     const MINIMAL_GENERATOR_TOML: &str = r#"
 template = "./template.json"
@@ -637,6 +875,9 @@ url = "https://example.com/sub1"
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
         assert!(!config.detour_selector);
+        assert!(!config.cache_subscription);
+        assert_eq!(config.cache_ttl, 60);
+        assert!(!config.diff_subscription);
         assert_eq!(config.subscriptions.len(), 1);
         assert_eq!(config.subscriptions[0].name, "MyProvider");
         assert_eq!(
@@ -657,6 +898,9 @@ url = "https://example.com/sub1"
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
         assert!(!config.detour_selector);
+        assert!(!config.cache_subscription);
+        assert_eq!(config.cache_ttl, 60);
+        assert!(!config.diff_subscription);
         assert_eq!(config.subscriptions.len(), 1);
     }
 
@@ -1052,6 +1296,149 @@ url = "https://example.com/sub1"
         let config = GeneratorConfig::from_toml(toml).unwrap();
         assert!(config.no_detour);
         assert!(!config.detour_selector);
+    }
+
+    // ========================================================================
+    // Cache Subscription Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_cache_subscription_enabled() {
+        let toml = r#"
+template = "./template.json"
+cache_subscription = true
+cache_ttl = 120
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.cache_subscription);
+        assert_eq!(config.cache_ttl, 120);
+    }
+
+    #[test]
+    fn test_parse_cache_subscription_default_false() {
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        assert!(!config.cache_subscription);
+        assert_eq!(config.cache_ttl, 60);
+    }
+
+    #[test]
+    fn test_parse_cache_ttl_custom() {
+        let toml = r#"
+template = "./template.json"
+cache_subscription = true
+cache_ttl = 30
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.cache_subscription);
+        assert_eq!(config.cache_ttl, 30);
+    }
+
+    #[test]
+    fn test_parse_diff_subscription_enabled() {
+        let toml = r#"
+template = "./template.json"
+diff_subscription = true
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.diff_subscription);
+    }
+
+    #[test]
+    fn test_parse_diff_subscription_default_false() {
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        assert!(!config.diff_subscription);
+    }
+
+    #[test]
+    fn test_diff_outbounds_no_changes() {
+        use crate::config::outbound::SocksOutbound;
+
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        let generator = Generator::new(config);
+
+        let old = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+        let new = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+
+        // This should not panic and should log "No changes"
+        generator.diff_outbounds("TestSub", &old, &new);
+    }
+
+    #[test]
+    fn test_diff_outbounds_with_additions() {
+        use crate::config::outbound::SocksOutbound;
+
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        let generator = Generator::new(config);
+
+        let old = vec![Outbound::Socks(SocksOutbound::new(
+            "proxy1", "1.2.3.4", 1080,
+        ))];
+        let new = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy3", "9.10.11.12", 1080)),
+        ];
+
+        // This should log additions
+        generator.diff_outbounds("TestSub", &old, &new);
+    }
+
+    #[test]
+    fn test_diff_outbounds_with_removals() {
+        use crate::config::outbound::SocksOutbound;
+
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        let generator = Generator::new(config);
+
+        let old = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy3", "9.10.11.12", 1080)),
+        ];
+        let new = vec![Outbound::Socks(SocksOutbound::new(
+            "proxy1", "1.2.3.4", 1080,
+        ))];
+
+        // This should log removals
+        generator.diff_outbounds("TestSub", &old, &new);
+    }
+
+    #[test]
+    fn test_diff_outbounds_with_both() {
+        use crate::config::outbound::SocksOutbound;
+
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        let generator = Generator::new(config);
+
+        let old = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+        let new = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(SocksOutbound::new("proxy3", "9.10.11.12", 1080)),
+        ];
+
+        // This should log both additions and removals
+        generator.diff_outbounds("TestSub", &old, &new);
     }
 
     // ========================================================================
