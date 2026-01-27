@@ -8,6 +8,11 @@ use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::get_version;
+
+/// Default filename to use when upload_path is a directory
+const DEFAULT_FILENAME: &str = "config.json";
+
 /// WebDAV configuration for uploading generated config files
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct WebDavConfig {
@@ -28,6 +33,7 @@ pub struct WebDavConfig {
     pub webdav_password: String,
 
     /// Remote path where the config will be uploaded (e.g., "/path/to/config.json")
+    /// If the path ends with '/', a default filename "config.json" will be appended.
     #[serde(default)]
     pub upload_path: String,
 }
@@ -59,6 +65,18 @@ impl WebDavConfig {
 
         Ok(())
     }
+
+    /// Get the normalized upload path, appending default filename if path is a directory
+    pub fn get_normalized_upload_path(&self) -> String {
+        let path = self.upload_path.trim();
+        if path.ends_with('/') {
+            format!("{}{}", path, DEFAULT_FILENAME)
+        } else if path.is_empty() {
+            format!("/{}", DEFAULT_FILENAME)
+        } else {
+            path.to_string()
+        }
+    }
 }
 
 /// WebDAV client for uploading files
@@ -73,7 +91,7 @@ impl WebDavClient {
         config.validate()?;
 
         let client = Client::builder()
-            .user_agent("turntable/0.2.0")
+            .user_agent(format!("turntable/{}", get_version()))
             .build()
             .context("Failed to build HTTP client for WebDAV")?;
 
@@ -83,12 +101,12 @@ impl WebDavClient {
     /// Build the full URL for the upload path
     fn build_url(&self, path: &str) -> String {
         let base_url = self.config.webdav_url.trim_end_matches('/');
-        let path = if path.starts_with('/') {
-            path.to_string()
+        let path = path.trim_start_matches('/');
+        if path.is_empty() {
+            base_url.to_string()
         } else {
-            format!("/{}", path)
-        };
-        format!("{}{}", base_url, path)
+            format!("{}/{}", base_url, path)
+        }
     }
 
     /// Create a request builder with authentication if credentials are provided
@@ -106,24 +124,111 @@ impl WebDavClient {
         builder
     }
 
+    /// Check if a resource exists using HEAD request
+    async fn resource_exists(&self, url: &str) -> Result<bool> {
+        debug!("Checking if resource exists: {}", url);
+
+        let response = self
+            .request(Method::HEAD, url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to check resource: {}", url))?;
+
+        let status = response.status();
+        debug!("HEAD response status: {}", status);
+
+        Ok(status.is_success())
+    }
+
+    /// Delete a resource using DELETE request (used before replacing)
+    async fn delete_resource(&self, url: &str) -> Result<bool> {
+        debug!("Deleting resource: {}", url);
+
+        let response = self
+            .request(Method::DELETE, url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to delete resource: {}", url))?;
+
+        let status = response.status();
+        debug!("DELETE response status: {}", status);
+
+        match status {
+            StatusCode::OK | StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(true),
+            StatusCode::UNAUTHORIZED => {
+                anyhow::bail!("WebDAV authentication failed for DELETE");
+            }
+            StatusCode::FORBIDDEN => {
+                anyhow::bail!("WebDAV access forbidden for DELETE");
+            }
+            _ => {
+                warn!(
+                    "DELETE returned unexpected status {}, continuing anyway",
+                    status
+                );
+                Ok(false)
+            }
+        }
+    }
+
     /// Upload content to the WebDAV server using PUT method
     pub async fn upload(&self, content: &str) -> Result<()> {
-        let url = self.build_url(&self.config.upload_path);
+        let upload_path = self.config.get_normalized_upload_path();
+        let url = self.build_url(&upload_path);
         info!("Uploading config to WebDAV: {}", url);
 
         // First, try to create parent directories
-        if let Err(e) = self
-            .ensure_parent_directories(&self.config.upload_path)
-            .await
-        {
+        if let Err(e) = self.ensure_parent_directories(&upload_path).await {
             warn!("Failed to create parent directories: {}", e);
             // Continue anyway, the server might already have the directories
         }
 
-        // Upload the file using PUT
+        // Try PUT request first
+        match self.put_content(&url, content).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Check if it's a 405 error, which might mean we need to DELETE first
+                let err_str = e.to_string();
+                if err_str.contains("405") || err_str.contains("Method Not Allowed") {
+                    debug!("PUT failed with 405, trying DELETE then PUT");
+
+                    // Check if resource exists
+                    if self.resource_exists(&url).await.unwrap_or(false) {
+                        // Try to delete existing resource
+                        if let Err(del_err) = self.delete_resource(&url).await {
+                            warn!("Failed to delete existing resource: {}", del_err);
+                        }
+
+                        // Retry PUT after delete
+                        if self.put_content(&url, content).await.is_ok() {
+                            return Ok(());
+                        }
+                    }
+
+                    // If still failing, return original error with more context
+                    anyhow::bail!(
+                        "WebDAV upload failed. The server returned 405 Method Not Allowed. \
+                        This might indicate:\n\
+                        1. The upload_path points to a directory instead of a file\n\
+                        2. The server doesn't support PUT on this path\n\
+                        3. The server requires different permissions\n\
+                        Current upload_path: {}\n\
+                        Full URL: {}",
+                        upload_path,
+                        url
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Perform the actual PUT request
+    async fn put_content(&self, url: &str, content: &str) -> Result<()> {
         let response = self
-            .request(Method::PUT, &url)
-            .header("Content-Type", "application/json")
+            .request(Method::PUT, url)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .header("Overwrite", "T") // WebDAV header to allow overwrite
             .body(content.to_string())
             .send()
             .await
@@ -150,8 +255,25 @@ impl WebDavClient {
             StatusCode::CONFLICT => {
                 anyhow::bail!(
                     "WebDAV conflict. The parent directory may not exist. Path: {}",
-                    self.config.upload_path
+                    url
                 );
+            }
+            StatusCode::METHOD_NOT_ALLOWED => {
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!(
+                    "WebDAV upload failed with status 405 Method Not Allowed: {}",
+                    if body.is_empty() {
+                        "No response body".to_string()
+                    } else {
+                        body
+                    }
+                );
+            }
+            StatusCode::INSUFFICIENT_STORAGE => {
+                anyhow::bail!("WebDAV server has insufficient storage space.");
+            }
+            StatusCode::LOCKED => {
+                anyhow::bail!("WebDAV resource is locked. Please try again later.");
             }
             _ => {
                 let body = response.text().await.unwrap_or_default();
@@ -188,7 +310,10 @@ impl WebDavClient {
                 Ok(true)
             }
             // 405 Method Not Allowed often means the directory already exists
-            StatusCode::METHOD_NOT_ALLOWED | StatusCode::CONFLICT => {
+            // 301 Moved Permanently can also indicate the directory exists (some servers redirect)
+            StatusCode::METHOD_NOT_ALLOWED
+            | StatusCode::CONFLICT
+            | StatusCode::MOVED_PERMANENTLY => {
                 debug!("Directory may already exist: {}", path);
                 Ok(false)
             }
@@ -324,6 +449,42 @@ mod tests {
     }
 
     #[test]
+    fn test_get_normalized_upload_path_with_filename() {
+        let config = WebDavConfig {
+            upload_path: "/path/to/config.json".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.get_normalized_upload_path(), "/path/to/config.json");
+    }
+
+    #[test]
+    fn test_get_normalized_upload_path_directory_with_slash() {
+        let config = WebDavConfig {
+            upload_path: "/path/to/".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.get_normalized_upload_path(), "/path/to/config.json");
+    }
+
+    #[test]
+    fn test_get_normalized_upload_path_root_directory() {
+        let config = WebDavConfig {
+            upload_path: "/".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.get_normalized_upload_path(), "/config.json");
+    }
+
+    #[test]
+    fn test_get_normalized_upload_path_empty() {
+        let config = WebDavConfig {
+            upload_path: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(config.get_normalized_upload_path(), "/config.json");
+    }
+
+    #[test]
     fn test_build_url() {
         let config = WebDavConfig {
             webdav_upload: true,
@@ -360,6 +521,20 @@ mod tests {
     }
 
     #[test]
+    fn test_build_url_empty_path() {
+        let config = WebDavConfig {
+            webdav_upload: true,
+            webdav_url: "https://example.com/dav".to_string(),
+            upload_path: "/test.json".to_string(),
+            ..Default::default()
+        };
+        let client = WebDavClient::new(config).unwrap();
+
+        assert_eq!(client.build_url(""), "https://example.com/dav");
+        assert_eq!(client.build_url("/"), "https://example.com/dav");
+    }
+
+    #[test]
     fn test_webdav_config_serde() {
         let toml_str = r#"
             webdav_upload = true
@@ -375,5 +550,18 @@ mod tests {
         assert_eq!(config.webdav_username, "user");
         assert_eq!(config.webdav_password, "secret");
         assert_eq!(config.upload_path, "/configs/sing-box.json");
+    }
+
+    #[test]
+    fn test_webdav_config_serde_directory_path() {
+        let toml_str = r#"
+            webdav_upload = true
+            webdav_url = "https://example.com/dav"
+            upload_path = "/configs/"
+        "#;
+
+        let config: WebDavConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.upload_path, "/configs/");
+        assert_eq!(config.get_normalized_upload_path(), "/configs/config.json");
     }
 }

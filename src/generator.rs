@@ -11,6 +11,7 @@ use crate::config::SingBoxConfig;
 use crate::config::dns::{Dns, Strategy};
 use crate::config::outbound::Outbound;
 use crate::config::version::{LATEST_VERSION, SingBoxVersion};
+use crate::get_version;
 use crate::parser::{SubscriptionType, detect_subscription_type, parse_subscription};
 use crate::transform::{
     DETOUR_SELECTOR_TAG, collect_non_detour_tags, filter_detour_outbounds, filter_ipv6_outbounds,
@@ -790,7 +791,7 @@ async fn fetch_text(url: &str) -> Result<String> {
     debug!("Fetching URL: {}", url);
 
     let client = reqwest::Client::builder()
-        .user_agent("turntable/0.1.0")
+        .user_agent(format!("turntable/{}", get_version()))
         .build()
         .context("Failed to build HTTP client")?;
 

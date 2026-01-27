@@ -4,3 +4,7 @@ pub mod generator;
 pub mod parser;
 pub mod transform;
 pub mod webdav;
+
+pub fn get_version() -> String {
+    "0.3.2".to_string()
+}
