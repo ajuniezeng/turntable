@@ -2,6 +2,7 @@
 //!
 //! This module provides functionality for transforming sing-box configurations:
 //! - IPv6 outbound filtering
+//! - Detour outbound filtering and selector generation
 //! - Country code extraction from flag emojis
 //! - Selector generation (country-based and subscription-based)
 
@@ -11,6 +12,7 @@ use std::net::Ipv6Addr;
 use tracing::{debug, info};
 
 use crate::config::outbound::{Outbound, SelectorOutbound};
+use crate::config::shared::DialFields;
 
 // ============================================================================
 // IPv6 Filtering
@@ -79,6 +81,209 @@ pub fn filter_ipv6_outbounds(outbounds: Vec<Outbound>) -> Vec<Outbound> {
     }
 
     filtered
+}
+
+// ============================================================================
+// Detour Filtering
+// ============================================================================
+
+/// Get the detour tag from an outbound's dial fields.
+pub fn get_outbound_detour(outbound: &Outbound) -> Option<&str> {
+    match outbound {
+        Outbound::Direct(o) => o.dial.detour.as_deref(),
+        Outbound::Socks(o) => o.dial.detour.as_deref(),
+        Outbound::Http(o) => o.dial.detour.as_deref(),
+        Outbound::Shadowsocks(o) => o.dial.detour.as_deref(),
+        Outbound::VMess(o) => o.dial.detour.as_deref(),
+        Outbound::Trojan(o) => o.dial.detour.as_deref(),
+        Outbound::WireGuard(o) => o.dial.detour.as_deref(),
+        Outbound::Hysteria(o) => o.dial.detour.as_deref(),
+        Outbound::VLess(o) => o.dial.detour.as_deref(),
+        Outbound::ShadowTls(o) => o.dial.detour.as_deref(),
+        Outbound::Tuic(o) => o.dial.detour.as_deref(),
+        Outbound::Hysteria2(o) => o.dial.detour.as_deref(),
+        Outbound::AnyTls(o) => o.dial.detour.as_deref(),
+        Outbound::Tor(o) => o.dial.detour.as_deref(),
+        Outbound::Ssh(o) => o.dial.detour.as_deref(),
+        Outbound::Naive(o) => o.dial.detour.as_deref(),
+        // These don't have dial fields
+        Outbound::Block(_) | Outbound::Dns(_) | Outbound::Selector(_) | Outbound::UrlTest(_) => {
+            None
+        }
+    }
+}
+
+/// Set the detour tag on an outbound's dial fields.
+///
+/// Returns true if the detour was set, false if the outbound doesn't support detour.
+pub fn set_outbound_detour(outbound: &mut Outbound, detour: &str) -> bool {
+    let set_detour = |dial: &mut DialFields| {
+        dial.detour = Some(detour.to_string());
+    };
+
+    match outbound {
+        Outbound::Direct(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Socks(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Http(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Shadowsocks(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::VMess(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Trojan(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::WireGuard(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Hysteria(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::VLess(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::ShadowTls(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Tuic(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Hysteria2(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::AnyTls(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Tor(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Ssh(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        Outbound::Naive(o) => {
+            set_detour(&mut o.dial);
+            true
+        }
+        // These don't have dial fields
+        Outbound::Block(_) | Outbound::Dns(_) | Outbound::Selector(_) | Outbound::UrlTest(_) => {
+            false
+        }
+    }
+}
+
+/// Filter out outbounds that have a detour tag set.
+///
+/// Returns a new vector containing only outbounds without detour.
+pub fn filter_detour_outbounds(outbounds: Vec<Outbound>) -> Vec<Outbound> {
+    let original_count = outbounds.len();
+    let filtered: Vec<Outbound> = outbounds
+        .into_iter()
+        .filter(|outbound| {
+            if let Some(detour) = get_outbound_detour(outbound) {
+                let tag = get_outbound_tag(outbound).unwrap_or("<unnamed>");
+                debug!(
+                    "Filtering out outbound with detour: tag={}, detour={}",
+                    tag, detour
+                );
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    let removed_count = original_count - filtered.len();
+    if removed_count > 0 {
+        info!("Filtered out {} outbounds with detour", removed_count);
+    }
+
+    filtered
+}
+
+/// Default tag for the detour selector
+pub const DETOUR_SELECTOR_TAG: &str = "⚡ Detour";
+
+/// Generate a detour selector from non-detour outbounds and update detour references.
+///
+/// This function:
+/// 1. Creates a selector containing all non-detour outbounds
+/// 2. Updates all outbounds that have a detour to point to the new selector
+///
+/// If `default_outbound` is provided, it will be set as the default for the selector.
+///
+/// Returns the selector outbound.
+pub fn generate_detour_selector(
+    outbounds: &mut [Outbound],
+    default_outbound: Option<String>,
+) -> Outbound {
+    // Collect tags of all non-detour outbounds
+    let non_detour_tags: Vec<String> = outbounds
+        .iter()
+        .filter(|o| get_outbound_detour(o).is_none())
+        .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+        .collect();
+
+    debug!(
+        "Generated detour selector with {} non-detour outbounds",
+        non_detour_tags.len()
+    );
+
+    // Update all outbounds with detour to point to the new selector
+    let mut updated_count = 0;
+    for outbound in outbounds.iter_mut() {
+        if get_outbound_detour(outbound).is_some() {
+            if set_outbound_detour(outbound, DETOUR_SELECTOR_TAG) {
+                updated_count += 1;
+            }
+        }
+    }
+
+    if updated_count > 0 {
+        info!(
+            "Updated {} outbounds to use detour selector '{}'",
+            updated_count, DETOUR_SELECTOR_TAG
+        );
+    }
+
+    let mut selector = SelectorOutbound::new(DETOUR_SELECTOR_TAG.to_string(), non_detour_tags);
+    if let Some(default) = default_outbound {
+        debug!("Setting default outbound for detour selector: {}", default);
+        selector.default = Some(default);
+    }
+
+    Outbound::Selector(selector)
+}
+
+/// Collect non-detour outbound tags from a list of outbounds.
+///
+/// This is useful for displaying options to the user before generating the selector.
+pub fn collect_non_detour_tags(outbounds: &[Outbound]) -> Vec<String> {
+    outbounds
+        .iter()
+        .filter(|o| get_outbound_detour(o).is_none())
+        .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+        .collect()
 }
 
 // ============================================================================
@@ -382,6 +587,131 @@ mod tests {
         assert!(!is_ipv6_address("10.0.0.1"));
         assert!(!is_ipv6_address("example.com"));
         assert!(!is_ipv6_address("my-server.example.com"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Detour Filtering Tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_outbound_detour() {
+        let mut outbound = SocksOutbound::new("proxy", "1.2.3.4", 1080);
+        outbound.dial.detour = Some("upstream".to_string());
+        let outbound = Outbound::Socks(outbound);
+
+        assert_eq!(get_outbound_detour(&outbound), Some("upstream"));
+    }
+
+    #[test]
+    fn test_get_outbound_detour_none() {
+        let outbound = Outbound::Socks(SocksOutbound::new("proxy", "1.2.3.4", 1080));
+        assert_eq!(get_outbound_detour(&outbound), None);
+    }
+
+    #[test]
+    fn test_set_outbound_detour() {
+        let mut outbound = Outbound::Socks(SocksOutbound::new("proxy", "1.2.3.4", 1080));
+        assert!(set_outbound_detour(&mut outbound, "new-detour"));
+        assert_eq!(get_outbound_detour(&outbound), Some("new-detour"));
+    }
+
+    #[test]
+    fn test_set_outbound_detour_selector() {
+        let mut outbound = Outbound::Selector(SelectorOutbound::new(
+            "selector".to_string(),
+            vec!["a".to_string()],
+        ));
+        // Selector doesn't support detour
+        assert!(!set_outbound_detour(&mut outbound, "new-detour"));
+    }
+
+    #[test]
+    fn test_filter_detour_outbounds() {
+        let mut with_detour = SocksOutbound::new("proxy-with-detour", "1.2.3.4", 1080);
+        with_detour.dial.detour = Some("upstream".to_string());
+
+        let outbounds = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(with_detour),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+
+        let filtered = filter_detour_outbounds(outbounds);
+        assert_eq!(filtered.len(), 2);
+
+        let tags: Vec<_> = filtered.iter().filter_map(get_outbound_tag).collect();
+        assert!(tags.contains(&"proxy1"));
+        assert!(tags.contains(&"proxy2"));
+        assert!(!tags.contains(&"proxy-with-detour"));
+    }
+
+    #[test]
+    fn test_generate_detour_selector() {
+        let mut with_detour = SocksOutbound::new("proxy-with-detour", "1.2.3.4", 1080);
+        with_detour.dial.detour = Some("old-upstream".to_string());
+
+        let mut outbounds = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(with_detour),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+
+        let selector = generate_detour_selector(&mut outbounds, None);
+
+        // Check selector was created with non-detour outbounds
+        if let Outbound::Selector(sel) = &selector {
+            assert_eq!(sel.tag, Some(DETOUR_SELECTOR_TAG.to_string()));
+            assert_eq!(sel.outbounds.len(), 2);
+            assert!(sel.outbounds.contains(&"proxy1".to_string()));
+            assert!(sel.outbounds.contains(&"proxy2".to_string()));
+            assert!(sel.default.is_none());
+        } else {
+            panic!("Expected selector outbound");
+        }
+
+        // Check that outbound with detour was updated to point to selector
+        let updated_detour = get_outbound_detour(&outbounds[1]);
+        assert_eq!(updated_detour, Some(DETOUR_SELECTOR_TAG));
+    }
+
+    #[test]
+    fn test_generate_detour_selector_with_default() {
+        let mut with_detour = SocksOutbound::new("proxy-with-detour", "1.2.3.4", 1080);
+        with_detour.dial.detour = Some("old-upstream".to_string());
+
+        let mut outbounds = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(with_detour),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+
+        let selector = generate_detour_selector(&mut outbounds, Some("proxy2".to_string()));
+
+        // Check selector was created with default set
+        if let Outbound::Selector(sel) = &selector {
+            assert_eq!(sel.tag, Some(DETOUR_SELECTOR_TAG.to_string()));
+            assert_eq!(sel.default, Some("proxy2".to_string()));
+        } else {
+            panic!("Expected selector outbound");
+        }
+    }
+
+    #[test]
+    fn test_collect_non_detour_tags() {
+        let mut with_detour = SocksOutbound::new("proxy-with-detour", "1.2.3.4", 1080);
+        with_detour.dial.detour = Some("upstream".to_string());
+
+        let outbounds = vec![
+            Outbound::Socks(SocksOutbound::new("proxy1", "1.2.3.4", 1080)),
+            Outbound::Socks(with_detour),
+            Outbound::Socks(SocksOutbound::new("proxy2", "5.6.7.8", 1080)),
+        ];
+
+        let tags = collect_non_detour_tags(&outbounds);
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains(&"proxy1".to_string()));
+        assert!(tags.contains(&"proxy2".to_string()));
+        assert!(!tags.contains(&"proxy-with-detour".to_string()));
     }
 
     #[test]

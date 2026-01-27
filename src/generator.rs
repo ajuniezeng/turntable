@@ -11,7 +11,8 @@ use crate::config::outbound::Outbound;
 use crate::config::version::{LATEST_VERSION, SingBoxVersion};
 use crate::parser::{SubscriptionType, detect_subscription_type, parse_subscription};
 use crate::transform::{
-    filter_ipv6_outbounds, generate_country_code_selectors_filtered,
+    DETOUR_SELECTOR_TAG, collect_non_detour_tags, filter_detour_outbounds, filter_ipv6_outbounds,
+    generate_country_code_selectors_filtered, generate_detour_selector,
     generate_subscription_selector, get_outbound_tag, update_selectors_with_new_tags,
 };
 
@@ -46,9 +47,14 @@ pub struct GeneratorConfig {
     #[serde(default)]
     pub country_codes: Vec<String>,
 
-    /// Remove outbound with detour tags
+    /// Remove outbounds with detour tags
     #[serde(default)]
     pub no_detour: bool,
+
+    /// Create a detour selector with all non-detour outbounds and replace detour tags with this selector.
+    /// Only works when `no_detour` is false.
+    #[serde(default)]
+    pub detour_selector: bool,
 
     /// Subscriptions list (required - at least one)
     pub subscriptions: Vec<Subscription>,
@@ -62,6 +68,11 @@ pub struct Subscription {
 
     /// URL to fetch the subscription from
     pub url: String,
+
+    /// Optional filter to remove outbounds by index (0-based).
+    /// E.g., `filter = [0, 1, 2]` removes the first, second, and third outbounds.
+    #[serde(default)]
+    pub filter: Vec<usize>,
 }
 
 fn default_output() -> String {
@@ -194,13 +205,58 @@ impl Generator {
             subscriptions_with_outbounds
         };
 
-        // 4. Collect all subscription outbounds for country code processing
+        // 4. Apply no_detour filter or detour_selector if enabled
+        let (subscriptions_with_outbounds, detour_selector) = if self.config.no_detour {
+            info!("Filtering out outbounds with detour (no_detour=true)");
+            let filtered: Vec<(String, Vec<Outbound>)> = subscriptions_with_outbounds
+                .into_iter()
+                .map(|(name, outbounds)| (name, filter_detour_outbounds(outbounds)))
+                .collect();
+            (filtered, None)
+        } else if self.config.detour_selector {
+            info!("Generating detour selector (detour_selector=true)");
+            // Collect all outbounds, generate detour selector, and update detour references
+            let mut all_outbounds: Vec<Outbound> = subscriptions_with_outbounds
+                .iter()
+                .flat_map(|(_, outbounds)| outbounds.clone())
+                .collect();
+
+            // Prompt user to select default outbound for detour selector
+            let non_detour_tags = collect_non_detour_tags(&all_outbounds);
+            let default_outbound = if non_detour_tags.is_empty() {
+                warn!("No non-detour outbounds found for detour selector");
+                None
+            } else {
+                prompt_detour_default(&non_detour_tags)
+            };
+
+            let selector = generate_detour_selector(&mut all_outbounds, default_outbound);
+
+            // Redistribute updated outbounds back to their subscriptions
+            let mut outbound_idx = 0;
+            let updated_subscriptions: Vec<(String, Vec<Outbound>)> = subscriptions_with_outbounds
+                .into_iter()
+                .map(|(name, outbounds)| {
+                    let count = outbounds.len();
+                    let updated: Vec<Outbound> =
+                        all_outbounds[outbound_idx..outbound_idx + count].to_vec();
+                    outbound_idx += count;
+                    (name, updated)
+                })
+                .collect();
+
+            (updated_subscriptions, Some(selector))
+        } else {
+            (subscriptions_with_outbounds, None)
+        };
+
+        // 5. Collect all subscription outbounds for country code processing
         let all_subscription_outbounds: Vec<Outbound> = subscriptions_with_outbounds
             .iter()
             .flat_map(|(_, outbounds)| outbounds.clone())
             .collect();
 
-        // 5. Generate subscription selectors (one per subscription)
+        // 6. Generate subscription selectors (one per subscription)
         let subscription_selectors: Vec<Outbound> = subscriptions_with_outbounds
             .iter()
             .map(|(name, outbounds)| generate_subscription_selector(name, outbounds))
@@ -210,7 +266,7 @@ impl Generator {
             subscription_selectors.len()
         );
 
-        // 6. Generate country code selectors if enabled
+        // 7. Generate country code selectors if enabled
         let country_selectors = if self.config.country_code_outbound_selectors {
             let selectors = generate_country_code_selectors_filtered(
                 &all_subscription_outbounds,
@@ -230,7 +286,7 @@ impl Generator {
             Vec::new()
         };
 
-        // 7. Collect all new selector tags for updating template selectors
+        // 8. Collect all new selector tags for updating template selectors
         // Order: subscription selectors first, then country code selectors (alphabetically sorted)
         let new_selector_tags: Vec<String> = subscription_selectors
             .iter()
@@ -238,7 +294,7 @@ impl Generator {
             .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
             .collect();
 
-        // 8. Update existing selectors in template with new selector tags
+        // 9. Update existing selectors in template with new selector tags
         if !new_selector_tags.is_empty() {
             debug!(
                 "Updating template selectors with {} new tags",
@@ -247,10 +303,15 @@ impl Generator {
             update_selectors_with_new_tags(&mut config.outbounds, &new_selector_tags);
         }
 
-        // 9. Add all new outbounds to config:
+        // 10. Add all new outbounds to config:
+        //    - Detour selector (if enabled)
         //    - Subscription selectors
         //    - Country code selectors
         //    - All subscription outbounds
+        if let Some(selector) = detour_selector {
+            info!("Adding detour selector '{}'", DETOUR_SELECTOR_TAG);
+            config.outbounds.push(selector);
+        }
         config.outbounds.extend(subscription_selectors);
         config.outbounds.extend(country_selectors);
         config.outbounds.extend(all_subscription_outbounds);
@@ -351,6 +412,27 @@ impl Generator {
 
             match self.fetch_singbox_subscription(&sub.url).await {
                 Ok(outbounds) => {
+                    // Apply filter if specified
+                    let outbounds = if sub.filter.is_empty() {
+                        outbounds
+                    } else {
+                        let original_count = outbounds.len();
+                        let filtered: Vec<_> = outbounds
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(i, _)| !sub.filter.contains(i))
+                            .map(|(_, o)| o)
+                            .collect();
+                        debug!(
+                            "Filtered subscription '{}': removed {} outbounds (indices {:?}), {} remaining",
+                            sub.name,
+                            original_count - filtered.len(),
+                            sub.filter,
+                            filtered.len()
+                        );
+                        filtered
+                    };
+
                     info!(
                         "Subscription '{}' returned {} outbounds",
                         sub.name,
@@ -454,6 +536,44 @@ async fn fetch_text(url: &str) -> Result<String> {
     Ok(text)
 }
 
+/// Prompt user to select a default outbound for the detour selector.
+///
+/// Returns `Some(tag)` if user selects an outbound, `None` if user skips.
+fn prompt_detour_default(outbound_tags: &[String]) -> Option<String> {
+    use dialoguer::{Select, theme::ColorfulTheme};
+
+    if outbound_tags.is_empty() {
+        return None;
+    }
+
+    // Add "Skip (no default)" option at the beginning
+    let mut items: Vec<&str> = vec!["(Skip - no default)"];
+    items.extend(outbound_tags.iter().map(|s| s.as_str()));
+
+    println!();
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select default outbound for detour selector")
+        .items(&items)
+        .default(0)
+        .interact();
+
+    match selection {
+        Ok(0) => {
+            info!("User skipped selecting default outbound");
+            None
+        }
+        Ok(idx) => {
+            let selected = outbound_tags[idx - 1].clone();
+            info!("User selected default outbound: {}", selected);
+            Some(selected)
+        }
+        Err(e) => {
+            warn!("Failed to get user selection: {}, skipping default", e);
+            None
+        }
+    }
+}
+
 /// Expand ~ to home directory in path
 fn expand_tilde(path: &str) -> String {
     if (path.starts_with("~/") || path == "~")
@@ -491,6 +611,7 @@ ipv4_only = false
 target_version = "1.13"
 country_code_outbound_selectors = true
 no_detour = false
+detour_selector = false
 
 [[subscriptions]]
 name = "MyProvider"
@@ -515,6 +636,7 @@ url = "https://example.com/sub1"
         assert_eq!(config.target_version, "1.13");
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
+        assert!(!config.detour_selector);
         assert_eq!(config.subscriptions.len(), 1);
         assert_eq!(config.subscriptions[0].name, "MyProvider");
         assert_eq!(
@@ -534,6 +656,7 @@ url = "https://example.com/sub1"
         assert_eq!(config.target_version, "1.13");
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
+        assert!(!config.detour_selector);
         assert_eq!(config.subscriptions.len(), 1);
     }
 
@@ -889,5 +1012,110 @@ url = "https://example.com/sub1"
     fn test_parse_country_codes_default_empty() {
         let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
         assert!(config.country_codes.is_empty());
+    }
+
+    // ========================================================================
+    // Detour Selector Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_detour_selector_enabled() {
+        let toml = r#"
+template = "./template.json"
+detour_selector = true
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.detour_selector);
+        assert!(!config.no_detour);
+    }
+
+    #[test]
+    fn test_parse_detour_selector_default_false() {
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        assert!(!config.detour_selector);
+    }
+
+    #[test]
+    fn test_parse_no_detour_enabled() {
+        let toml = r#"
+template = "./template.json"
+no_detour = true
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.no_detour);
+        assert!(!config.detour_selector);
+    }
+
+    // ========================================================================
+    // Subscription Filter Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_subscription_with_filter() {
+        let toml = r#"
+template = "./template.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+filter = [0, 1, 2]
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert_eq!(config.subscriptions.len(), 1);
+        assert_eq!(config.subscriptions[0].filter, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_parse_subscription_filter_empty() {
+        let toml = r#"
+template = "./template.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+filter = []
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert!(config.subscriptions[0].filter.is_empty());
+    }
+
+    #[test]
+    fn test_parse_subscription_filter_default_empty() {
+        let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
+        assert!(config.subscriptions[0].filter.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_subscriptions_with_different_filters() {
+        let toml = r#"
+template = "./template.json"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+filter = [0]
+
+[[subscriptions]]
+name = "Provider2"
+url = "https://example.com/sub2"
+filter = [1, 2, 3]
+
+[[subscriptions]]
+name = "Provider3"
+url = "https://example.com/sub3"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert_eq!(config.subscriptions.len(), 3);
+        assert_eq!(config.subscriptions[0].filter, vec![0]);
+        assert_eq!(config.subscriptions[1].filter, vec![1, 2, 3]);
+        assert!(config.subscriptions[2].filter.is_empty());
     }
 }

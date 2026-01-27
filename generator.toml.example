@@ -21,10 +21,17 @@ country_code_outbound_selectors = true
 # country_codes = ["US", "JP", "HK", "TW", "SG"]
 country_codes = []
 
-# Remove outbound with detour tags, default to false
+# Remove outbounds with detour tags, default to false
 no_detour = false
+
+# Create a detour selector with all non-detour outbounds and replace detour tags with this selector.
+# Only works when `no_detour` is false, default to false
+detour_selector = false
 
 # Subscriptions (required - at least one)
 [[subscriptions]]
 name = "MyProvider"
 url = "https://example.com/subscription-url"
+# Optional filter to remove outbounds by index (0-based)
+# E.g., filter = [0, 1, 2] removes the first, second, and third outbounds
+# filter = [0, 1, 2]
