@@ -645,6 +645,15 @@ pub struct HysteriaOutbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_port: Option<u16>,
 
+    /// Server port range list (since 1.12.0)
+    /// Conflicts with server_port
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_ports: Vec<String>,
+
+    /// Port hopping interval (since 1.12.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_interval: Option<String>,
+
     /// Upload bandwidth in Mbps
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up_mbps: Option<u32>,

@@ -1,0 +1,30 @@
+# Generator Config, default location `~/.config/turntable/generator.toml`
+
+# Template file, support local path or remote URL (required)
+template = "./templates/1.13.json"
+# template = "https://www.example.com/1.13.json"
+
+# Output file path, default location `./out/config.json`
+output = "./out/config.json"
+
+# DNS strategy will be set to `ipv4_only`, remove all outbound whose host is IPv6 address
+ipv4_only = false
+
+# Target sing-box version, default to latest supported version, currently "1.13"
+target_version = "1.13"
+
+# Enable country code outbound selectors. Turntable will generate selectors based on country flags from outbound tags and insert these selectors to existing selectors from template, default to true
+country_code_outbound_selectors = true
+
+# List of country codes to include in selectors (e.g., ["US", "JP", "HK"])
+# If empty or not specified, all country codes found in outbound tags will be included
+# country_codes = ["US", "JP", "HK", "TW", "SG"]
+country_codes = []
+
+# Remove outbound with detour tags, default to false
+no_detour = false
+
+# Subscriptions (required - at least one)
+[[subscriptions]]
+name = "MyProvider"
+url = "https://example.com/subscription-url"

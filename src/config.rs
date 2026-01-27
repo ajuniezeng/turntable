@@ -24,6 +24,7 @@ pub mod service;
 pub mod shared;
 pub mod util;
 pub mod validation;
+pub mod version;
 
 /// Main sing-box configuration structure
 ///

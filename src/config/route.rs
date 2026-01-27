@@ -3,11 +3,11 @@
 //! This module contains typed configuration for routing rules, rule sets,
 //! and route actions.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 use crate::config::shared::{DomainResolver, DomainStrategy, NetworkType};
-use crate::config::util::{is_false, is_zero_i32, is_zero_u16};
+use crate::config::util::{is_false, is_zero_i32, is_zero_u16, string_or_vec, u16_or_vec};
 
 // ============================================================================
 // Route Configuration
@@ -165,7 +165,11 @@ pub struct RouteRule {
 
     // Match conditions
     /// Match inbound tags
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub inbound: Vec<String>,
 
     /// Match IP version (4 or 6)
@@ -173,51 +177,99 @@ pub struct RouteRule {
     pub ip_version: Option<u8>,
 
     /// Match network type (tcp, udp, icmp since 1.13.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub network: Vec<String>,
 
     /// Match authenticated username
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub auth_user: Vec<String>,
 
     /// Match sniffed protocol
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub protocol: Vec<String>,
 
     /// Match sniffed client type (since 1.10.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub client: Vec<String>,
 
     /// Match full domain
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain: Vec<String>,
 
     /// Match domain suffix
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_suffix: Vec<String>,
 
     /// Match domain keyword
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_keyword: Vec<String>,
 
     /// Match domain regex
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_regex: Vec<String>,
 
     /// Match geosite (deprecated in 1.8.0, removed in 1.12.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub geosite: Vec<String>,
 
     /// Match source geoip (deprecated in 1.8.0, removed in 1.12.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_geoip: Vec<String>,
 
     /// Match geoip (deprecated in 1.8.0, removed in 1.12.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub geoip: Vec<String>,
 
     /// Match source IP CIDR
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_ip_cidr: Vec<String>,
 
     /// Match non-public source IP (since 1.8.0)
@@ -225,7 +277,11 @@ pub struct RouteRule {
     pub source_ip_is_private: bool,
 
     /// Match IP CIDR
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub ip_cidr: Vec<String>,
 
     /// Match non-public IP (since 1.8.0)
@@ -233,39 +289,75 @@ pub struct RouteRule {
     pub ip_is_private: bool,
 
     /// Match source port
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "u16_or_vec"
+    )]
     pub source_port: Vec<u16>,
 
     /// Match source port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_port_range: Vec<String>,
 
     /// Match port
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "u16_or_vec"
+    )]
     pub port: Vec<u16>,
 
     /// Match port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub port_range: Vec<String>,
 
     /// Match process name (Linux/Windows/macOS)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_name: Vec<String>,
 
     /// Match process path (Linux/Windows/macOS)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path: Vec<String>,
 
     /// Match process path regex (since 1.10.0, Linux/Windows/macOS)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path_regex: Vec<String>,
 
     /// Match Android package name
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub package_name: Vec<String>,
 
     /// Match user name (Linux only)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub user: Vec<String>,
 
     /// Match user ID (Linux only)
@@ -297,23 +389,43 @@ pub struct RouteRule {
     pub network_interface_address: HashMap<String, Vec<String>>,
 
     /// Match default interface address (since 1.13.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub default_interface_address: Vec<String>,
 
     /// Match WiFi SSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_ssid: Vec<String>,
 
     /// Match WiFi BSSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_bssid: Vec<String>,
 
     /// Match preferred routes by outbound tags (since 1.13.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub preferred_by: Vec<String>,
 
     /// Match rule sets (since 1.8.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub rule_set: Vec<String>,
 
     /// Make ip_cidr in rule-sets match source IP (deprecated in 1.10.0)
@@ -330,7 +442,11 @@ pub struct RouteRule {
 
     // Action fields
     /// Rule action (since 1.11.0)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_rule_action"
+    )]
     pub action: Option<RuleAction>,
 
     /// Target outbound tag (deprecated in 1.11.0, moved to action)
@@ -434,6 +550,24 @@ impl RouteRule {
         self
     }
 
+    /// Match geosite (deprecated in 1.8.0, removed in 1.12.0).
+    pub fn match_geosite(mut self, geosites: Vec<String>) -> Self {
+        self.geosite = geosites;
+        self
+    }
+
+    /// Match geoip (deprecated in 1.8.0, removed in 1.12.0).
+    pub fn match_geoip(mut self, geoips: Vec<String>) -> Self {
+        self.geoip = geoips;
+        self
+    }
+
+    /// Match source geoip (deprecated in 1.8.0, removed in 1.12.0).
+    pub fn match_source_geoip(mut self, geoips: Vec<String>) -> Self {
+        self.source_geoip = geoips;
+        self
+    }
+
     /// Invert the match result.
     pub fn invert(mut self) -> Self {
         self.invert = true;
@@ -446,8 +580,10 @@ impl RouteRule {
 // ============================================================================
 
 /// Rule action types.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "action", rename_all = "kebab-case")]
+///
+/// Supports both simple string format (e.g., `"action": "sniff"`) and
+/// object format (e.g., `"action": {"action": "sniff", "timeout": "500ms"}`).
+#[derive(Clone, Debug)]
 pub enum RuleAction {
     /// Route to an outbound
     Route(RouteAction),
@@ -465,8 +601,123 @@ pub enum RuleAction {
     Resolve(ResolveAction),
 }
 
+impl Serialize for RuleAction {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Check if we can use the simple string format (when inner struct is default)
+        match self {
+            RuleAction::Sniff(action) if *action == SniffAction::default() => {
+                serializer.serialize_str("sniff")
+            }
+            RuleAction::HijackDns => serializer.serialize_str("hijack-dns"),
+            RuleAction::Reject(action) if *action == RejectAction::default() => {
+                serializer.serialize_str("reject")
+            }
+            RuleAction::Route(action) if *action == RouteAction::default() => {
+                serializer.serialize_str("route")
+            }
+            RuleAction::Bypass(action) if *action == BypassAction::default() => {
+                serializer.serialize_str("bypass")
+            }
+            RuleAction::RouteOptions(action) if *action == RouteOptionsAction::default() => {
+                serializer.serialize_str("route-options")
+            }
+            RuleAction::Resolve(action) if *action == ResolveAction::default() => {
+                serializer.serialize_str("resolve")
+            }
+            // For non-default cases, use the tagged object format
+            _ => {
+                #[derive(Serialize)]
+                #[serde(tag = "action", rename_all = "kebab-case")]
+                enum RuleActionTagged<'a> {
+                    Route(&'a RouteAction),
+                    Bypass(&'a BypassAction),
+                    Reject(&'a RejectAction),
+                    HijackDns,
+                    RouteOptions(&'a RouteOptionsAction),
+                    Sniff(&'a SniffAction),
+                    Resolve(&'a ResolveAction),
+                }
+
+                let tagged = match self {
+                    RuleAction::Route(a) => RuleActionTagged::Route(a),
+                    RuleAction::Bypass(a) => RuleActionTagged::Bypass(a),
+                    RuleAction::Reject(a) => RuleActionTagged::Reject(a),
+                    RuleAction::HijackDns => RuleActionTagged::HijackDns,
+                    RuleAction::RouteOptions(a) => RuleActionTagged::RouteOptions(a),
+                    RuleAction::Sniff(a) => RuleActionTagged::Sniff(a),
+                    RuleAction::Resolve(a) => RuleActionTagged::Resolve(a),
+                };
+                tagged.serialize(serializer)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RuleAction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        match value {
+            // Handle string format: "sniff", "hijack-dns", "reject"
+            serde_json::Value::String(s) => match s.as_str() {
+                "sniff" => Ok(RuleAction::Sniff(SniffAction::default())),
+                "hijack-dns" => Ok(RuleAction::HijackDns),
+                "reject" => Ok(RuleAction::Reject(RejectAction::default())),
+                "route" => Ok(RuleAction::Route(RouteAction::default())),
+                "bypass" => Ok(RuleAction::Bypass(BypassAction::default())),
+                "route-options" => Ok(RuleAction::RouteOptions(RouteOptionsAction::default())),
+                "resolve" => Ok(RuleAction::Resolve(ResolveAction::default())),
+                other => Err(D::Error::custom(format!("unknown action: {}", other))),
+            },
+            // Handle object format: {"action": "sniff", ...}
+            serde_json::Value::Object(_) => {
+                #[derive(Deserialize)]
+                #[serde(tag = "action", rename_all = "kebab-case")]
+                enum RuleActionInner {
+                    Route(RouteAction),
+                    Bypass(BypassAction),
+                    Reject(RejectAction),
+                    HijackDns,
+                    RouteOptions(RouteOptionsAction),
+                    Sniff(SniffAction),
+                    Resolve(ResolveAction),
+                }
+
+                let inner: RuleActionInner =
+                    serde_json::from_value(value).map_err(D::Error::custom)?;
+                Ok(match inner {
+                    RuleActionInner::Route(a) => RuleAction::Route(a),
+                    RuleActionInner::Bypass(a) => RuleAction::Bypass(a),
+                    RuleActionInner::Reject(a) => RuleAction::Reject(a),
+                    RuleActionInner::HijackDns => RuleAction::HijackDns,
+                    RuleActionInner::RouteOptions(a) => RuleAction::RouteOptions(a),
+                    RuleActionInner::Sniff(a) => RuleAction::Sniff(a),
+                    RuleActionInner::Resolve(a) => RuleAction::Resolve(a),
+                })
+            }
+            _ => Err(D::Error::custom("expected string or object for action")),
+        }
+    }
+}
+
+/// Deserialize Option<RuleAction> handling both string and object formats.
+fn deserialize_option_rule_action<'de, D>(deserializer: D) -> Result<Option<RuleAction>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<RuleAction>::deserialize(deserializer)
+}
+
 /// Route action - routes connection to specified outbound.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct RouteAction {
     /// Target outbound tag (required)
     pub outbound: String,
@@ -536,7 +787,7 @@ impl RouteAction {
 }
 
 /// Bypass action - bypasses sing-box at kernel level (since 1.13.0).
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct BypassAction {
     /// Target outbound tag (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -575,7 +826,7 @@ pub struct BypassAction {
 }
 
 /// Reject action - rejects connections.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct RejectAction {
     /// Reject method (default, drop, or reply for ICMP)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -617,7 +868,7 @@ impl RejectAction {
 }
 
 /// Route options action - sets routing options without changing destination.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct RouteOptionsAction {
     /// Override connection destination address
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -669,7 +920,7 @@ pub struct RouteOptionsAction {
 }
 
 /// Sniff action - performs protocol sniffing.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SniffAction {
     /// Enabled sniffers (all by default)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -700,7 +951,7 @@ impl SniffAction {
 }
 
 /// Resolve action - resolves domain to IP addresses.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct ResolveAction {
     /// DNS server tag to use
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -895,63 +1146,123 @@ pub struct HeadlessRule {
     pub query_type: Vec<serde_json::Value>,
 
     /// Match network type (tcp, udp)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub network: Vec<String>,
 
     /// Match full domain
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain: Vec<String>,
 
     /// Match domain suffix
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_suffix: Vec<String>,
 
     /// Match domain keyword
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_keyword: Vec<String>,
 
     /// Match domain regex
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_regex: Vec<String>,
 
     /// Match source IP CIDR
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_ip_cidr: Vec<String>,
 
     /// Match IP CIDR
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub ip_cidr: Vec<String>,
 
     /// Match source port
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "u16_or_vec"
+    )]
     pub source_port: Vec<u16>,
 
     /// Match source port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_port_range: Vec<String>,
 
     /// Match port
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "u16_or_vec"
+    )]
     pub port: Vec<u16>,
 
     /// Match port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub port_range: Vec<String>,
 
     /// Match process name (Linux/Windows/macOS)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_name: Vec<String>,
 
     /// Match process path (Linux/Windows/macOS)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path: Vec<String>,
 
     /// Match process path regex (since 1.10.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path_regex: Vec<String>,
 
     /// Match Android package name
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub package_name: Vec<String>,
 
     /// Match network type (since 1.11.0, Android/Apple)
@@ -971,15 +1282,27 @@ pub struct HeadlessRule {
     pub network_interface_address: HashMap<String, Vec<String>>,
 
     /// Match default interface address (since 1.13.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub default_interface_address: Vec<String>,
 
     /// Match WiFi SSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_ssid: Vec<String>,
 
     /// Match WiFi BSSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_bssid: Vec<String>,
 
     /// Invert match result
@@ -1095,6 +1418,30 @@ mod tests {
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains(r#""action":"reject""#));
         assert!(json.contains(r#""method":"drop""#));
+    }
+
+    #[test]
+    fn test_rule_action_sniff_deserialization() {
+        let json = r#"{"action": "sniff"}"#;
+        let result: Result<RuleAction, _> = serde_json::from_str(json);
+        println!("Sniff result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse sniff action: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_route_rule_with_sniff_action() {
+        let json = r#"{"inbound": "tun-in", "action": "sniff"}"#;
+        let result: Result<RouteRule, _> = serde_json::from_str(json);
+        println!("RouteRule result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse route rule with sniff: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1217,9 +1564,10 @@ mod tests {
 
     #[test]
     fn test_hijack_dns_action() {
+        // HijackDns has no fields, so it serializes as a simple string
         let action = RuleAction::HijackDns;
         let json = serde_json::to_string(&action).unwrap();
-        assert!(json.contains(r#""action":"hijack-dns""#));
+        assert_eq!(json, r#""hijack-dns""#);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::config::shared::{InboundTlsConfig, ListenFields};
-use crate::config::util::{is_false, is_zero_u32};
+use crate::config::util::{is_false, is_zero_u32, string_or_vec};
 
 // ============================================================================
 // Inbound Enum
@@ -797,7 +797,11 @@ pub struct TunInbound {
     pub interface_name: Option<String>,
 
     /// IPv4 and IPv6 address prefixes (since 1.10.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub address: Vec<String>,
 
     /// Maximum transmission unit

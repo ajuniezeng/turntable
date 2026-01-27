@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::config::util::is_false;
+use crate::config::util::{is_false, string_or_vec};
 
 /// DNS configuration for sing-box
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -440,7 +440,11 @@ pub enum DnsRule {
 pub struct DefaultDnsRule {
     // Match conditions
     /// Match inbound tags
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub inbound: Vec<String>,
 
     /// Match IP version (4 or 6)
@@ -448,7 +452,11 @@ pub struct DefaultDnsRule {
     pub ip_version: Option<u8>,
 
     /// Match DNS query type
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "query_type_string_or_vec"
+    )]
     pub query_type: Vec<QueryType>,
 
     /// Match network type (tcp or udp)
@@ -456,31 +464,59 @@ pub struct DefaultDnsRule {
     pub network: Option<String>,
 
     /// Match authenticated user
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub auth_user: Vec<String>,
 
     /// Match sniffed protocol
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub protocol: Vec<String>,
 
     /// Match full domain
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain: Vec<String>,
 
     /// Match domain suffix
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_suffix: Vec<String>,
 
     /// Match domain keyword
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_keyword: Vec<String>,
 
     /// Match domain regex
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub domain_regex: Vec<String>,
 
     /// Match source IP CIDR
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_ip_cidr: Vec<String>,
 
     /// Match non-public source IP
@@ -488,7 +524,11 @@ pub struct DefaultDnsRule {
     pub source_ip_is_private: bool,
 
     /// Match IP CIDR with query response
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub ip_cidr: Vec<String>,
 
     /// Match private IP with query response
@@ -504,7 +544,11 @@ pub struct DefaultDnsRule {
     pub source_port: Vec<u16>,
 
     /// Match source port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_port_range: Vec<String>,
 
     /// Match destination port
@@ -512,27 +556,51 @@ pub struct DefaultDnsRule {
     pub port: Vec<u16>,
 
     /// Match destination port range
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub port_range: Vec<String>,
 
     /// Match process name
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_name: Vec<String>,
 
     /// Match process path
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path: Vec<String>,
 
     /// Match process path regex
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub process_path_regex: Vec<String>,
 
     /// Match Android package name
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub package_name: Vec<String>,
 
     /// Match user name (Linux only)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub user: Vec<String>,
 
     /// Match user ID (Linux only)
@@ -544,7 +612,11 @@ pub struct DefaultDnsRule {
     pub clash_mode: Option<String>,
 
     /// Match network type (wifi, cellular, ethernet, other)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub network_type: Vec<String>,
 
     /// Match if network is considered expensive
@@ -564,19 +636,35 @@ pub struct DefaultDnsRule {
     pub network_interface_address: Option<HashMap<String, Vec<String>>>,
 
     /// Match default interface address
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub default_interface_address: Vec<String>,
 
     /// Match WiFi SSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_ssid: Vec<String>,
 
     /// Match WiFi BSSID
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub wifi_bssid: Vec<String>,
 
     /// Match rule-set
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub rule_set: Vec<String>,
 
     /// Make ip_cidr rules in rule-sets match the source IP
@@ -592,7 +680,11 @@ pub struct DefaultDnsRule {
     pub invert: bool,
 
     /// Match outbound tags (deprecated in 1.12.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub outbound: Vec<String>,
 
     // Action fields
@@ -606,16 +698,47 @@ pub struct DefaultDnsRule {
     pub rule_set_ipcidr_match_source: bool,
 
     /// Deprecated: Match geosite
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub geosite: Vec<String>,
 
     /// Deprecated: Match source GeoIP
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub source_geoip: Vec<String>,
 
     /// Deprecated: Match GeoIP with query response
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
     pub geoip: Vec<String>,
+}
+
+/// Helper enum for deserializing query_type fields that can be either a single value or an array.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum QueryTypeOrVec {
+    Single(QueryType),
+    Multiple(Vec<QueryType>),
+}
+
+/// Deserializes a query_type field that can be either a single value or an array.
+fn query_type_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<QueryType>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match QueryTypeOrVec::deserialize(deserializer)? {
+        QueryTypeOrVec::Single(s) => Ok(vec![s]),
+        QueryTypeOrVec::Multiple(v) => Ok(v),
+    }
 }
 
 /// Query type - can be integer or string
@@ -654,9 +777,45 @@ pub enum LogicalMode {
 }
 
 /// DNS rule action
+/// Supports both legacy format (just `server` field) and new format (`action` tag)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum DnsRuleAction {
+    /// Tagged action with explicit `action` field (try first since it has discriminator)
+    Tagged(TaggedDnsRuleAction),
+
+    /// Legacy route action - just has `server` field without `action` tag
+    Legacy(LegacyRouteAction),
+}
+
+/// Legacy route action for backward compatibility
+/// Used when DNS rule has `server` field but no `action` tag
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LegacyRouteAction {
+    /// Target DNS server tag (required for legacy format)
+    pub server: String,
+
+    /// Domain strategy for this query
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<Strategy>,
+
+    /// Disable cache for this query
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_cache: bool,
+
+    /// Rewrite TTL in DNS responses
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewrite_ttl: Option<u32>,
+
+    /// Client subnet for this query
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_subnet: Option<String>,
+}
+
+/// Tagged DNS rule action with explicit `action` field
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "action", rename_all = "lowercase")]
-pub enum DnsRuleAction {
+pub enum TaggedDnsRuleAction {
     /// Route to a DNS server
     Route(RouteAction),
 
@@ -673,7 +832,13 @@ pub enum DnsRuleAction {
 
 impl Default for DnsRuleAction {
     fn default() -> Self {
-        DnsRuleAction::Route(RouteAction::default())
+        DnsRuleAction::Legacy(LegacyRouteAction {
+            server: String::new(),
+            strategy: None,
+            disable_cache: false,
+            rewrite_ttl: None,
+            client_subnet: None,
+        })
     }
 }
 
@@ -808,5 +973,53 @@ mod tests {
         let json = serde_json::to_string(&server).unwrap();
         assert!(json.contains(r#""tag":"google""#));
         assert!(json.contains(r#""address":"8.8.8.8""#));
+    }
+
+    #[test]
+    fn test_dns_rule_with_reject_action() {
+        let json = r#"{"rule_set": "AWAvenue-Ads-Rule", "action": "reject"}"#;
+        let result: Result<DefaultDnsRule, _> = serde_json::from_str(json);
+        println!("Result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse DNS rule with reject action: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_dns_rule_with_server_only() {
+        let json = r#"{"clash_mode": "global", "server": "fakedns"}"#;
+        let result: Result<DefaultDnsRule, _> = serde_json::from_str(json);
+        println!("Result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse DNS rule with server only: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_dns_rule_action_tagged_reject() {
+        let json = r#"{"action": "reject"}"#;
+        let result: Result<DnsRuleAction, _> = serde_json::from_str(json);
+        println!("Result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse DnsRuleAction reject: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_dns_rule_action_legacy_server() {
+        let json = r#"{"server": "fakedns"}"#;
+        let result: Result<DnsRuleAction, _> = serde_json::from_str(json);
+        println!("Result: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to parse DnsRuleAction legacy: {:?}",
+            result.err()
+        );
     }
 }
