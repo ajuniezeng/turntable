@@ -1,0 +1,8 @@
+/target
+
+# MacOS
+.DS_STORE
+
+generator.toml
+
+sing_box_docs
