@@ -454,7 +454,8 @@ impl Generator {
 
     /// Get the cache directory path (same directory as output file)
     fn get_cache_dir(&self) -> PathBuf {
-        let output_path = Path::new(&self.config.output);
+        let expanded_output = expand_tilde(&self.config.output);
+        let output_path = Path::new(&expanded_output);
         output_path
             .parent()
             .map(|p| p.to_path_buf())
