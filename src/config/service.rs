@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::config::serde_helpers::is_false;
 use crate::config::shared::{DialFields, InboundTlsConfig, ListenFields, OutboundTlsConfig};
-use crate::config::util::is_false;
 
 // ============================================================================
 // Service Enum

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::config::serde_helpers::{
+    default_wireguard_mtu, is_default_wireguard_mtu, is_false, is_zero_u32,
+};
 use crate::config::shared::{DialFields, OutboundTlsConfig};
-use crate::config::util::{default_wireguard_mtu, is_default_wireguard_mtu, is_false, is_zero_u32};
 
 // ============================================================================
 // Outbound Enum

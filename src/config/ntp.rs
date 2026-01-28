@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::serde_helpers::is_false;
 use crate::config::shared::DialFields;
-use crate::config::util::is_false;
 
 /// NTP configuration for sing-box
 ///

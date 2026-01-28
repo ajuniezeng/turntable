@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config::shared::DialFields;
-use crate::config::util::{
+use crate::config::serde_helpers::{
     default_wireguard_mtu, is_default_wireguard_mtu, is_false, is_zero_u16, is_zero_u32,
 };
+use crate::config::shared::DialFields;
 
 /// Endpoint configuration enum (since sing-box 1.11.0)
 ///

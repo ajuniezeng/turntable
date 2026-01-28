@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config::util::is_false;
+use crate::config::serde_helpers::is_false;
 
 /// Log configuration for sing-box
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

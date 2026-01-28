@@ -6,8 +6,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+use crate::config::serde_helpers::{is_false, is_zero_i32, is_zero_u16, string_or_vec, u16_or_vec};
 use crate::config::shared::{DomainResolver, DomainStrategy, NetworkType};
-use crate::config::util::{is_false, is_zero_i32, is_zero_u16, string_or_vec, u16_or_vec};
 
 // ============================================================================
 // Route Configuration

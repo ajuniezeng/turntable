@@ -1,223 +1,55 @@
+//! Configuration generator module
+//!
+//! This module orchestrates the generation of sing-box configuration files
+//! from templates and subscription sources.
+
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::time::{Duration, SystemTime};
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::SingBoxConfig;
 use crate::config::dns::{Dns, Strategy};
 use crate::config::outbound::Outbound;
-use crate::config::version::{LATEST_VERSION, SingBoxVersion};
-use crate::get_version;
 use crate::parser::{SubscriptionType, detect_subscription_type, parse_subscription};
 use crate::transform::{
     DETOUR_SELECTOR_TAG, collect_non_detour_tags, filter_detour_outbounds, filter_ipv6_outbounds,
     generate_country_code_selectors_filtered, generate_detour_selector,
     generate_subscription_selector, get_outbound_tag, update_selectors_with_new_tags,
 };
-use crate::webdav::{WebDavConfig, upload_to_webdav};
+use crate::webdav::upload_to_webdav;
+
+// Sub-modules
+pub mod cache;
+pub mod diff;
+pub mod generator_config;
+pub mod helpers;
+pub mod subscription;
+
+// Re-exports
+pub use cache::{CacheManager, get_cache_dir_from_output};
+pub use diff::{DiffResult, diff_outbounds, log_diff};
+pub use generator_config::GeneratorConfig;
+pub use helpers::{expand_tilde, fetch_text, prompt_detour_default};
+pub use subscription::{SingBoxSubscription, Subscription};
 
 // ============================================================================
-// Generator Config Types
+// Generator
 // ============================================================================
-
-/// Generator configuration parsed from TOML file
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GeneratorConfig {
-    /// Template file path or URL (required)
-    pub template: String,
-
-    /// Output file path, default "./out/config.json"
-    #[serde(default = "default_output")]
-    pub output: String,
-
-    /// DNS strategy will be set to `ipv4_only`, remove all outbound whose host is IPv6 address
-    #[serde(default)]
-    pub ipv4_only: bool,
-
-    /// Target sing-box version, default to latest supported version
-    #[serde(default = "default_target_version")]
-    pub target_version: String,
-
-    /// Enable country code outbound selectors
-    #[serde(default = "default_true")]
-    pub country_code_outbound_selectors: bool,
-
-    /// List of country codes to include in selectors (e.g., ["US", "JP", "HK"])
-    /// If empty or not specified, all country codes found in outbound tags will be included
-    #[serde(default)]
-    pub country_codes: Vec<String>,
-
-    /// Remove outbounds with detour tags
-    #[serde(default)]
-    pub no_detour: bool,
-
-    /// Create a detour selector with all non-detour outbounds and replace detour tags with this selector.
-    /// Only works when `no_detour` is false.
-    #[serde(default)]
-    pub detour_selector: bool,
-
-    /// Cache every subscription as a single sing-box outbound format json file in output directory
-    #[serde(default)]
-    pub cache_subscription: bool,
-
-    /// Cache time to live in minutes. Ignored when `cache_subscription` is false.
-    #[serde(default = "default_cache_ttl")]
-    pub cache_ttl: u64,
-
-    /// Show diff between newly fetched subscription and cached version
-    #[serde(default)]
-    pub diff_subscription: bool,
-
-    /// Enable WebDAV upload
-    #[serde(default)]
-    pub webdav_upload: bool,
-
-    /// WebDAV server URL (e.g., "https://example.com/dav")
-    #[serde(default)]
-    pub webdav_url: String,
-
-    /// WebDAV username for authentication
-    #[serde(default)]
-    pub webdav_username: String,
-
-    /// WebDAV password for authentication
-    #[serde(default)]
-    pub webdav_password: String,
-
-    /// Remote path where the config will be uploaded (e.g., "/path/to/config.json")
-    #[serde(default)]
-    pub upload_path: String,
-
-    /// Subscriptions list (required - at least one)
-    pub subscriptions: Vec<Subscription>,
-}
-
-/// Subscription configuration
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Subscription {
-    /// Name/identifier for this subscription
-    pub name: String,
-
-    /// URL to fetch the subscription from
-    pub url: String,
-
-    /// Optional filter to remove outbounds by index (0-based).
-    /// E.g., `filter = [0, 1, 2]` removes the first, second, and third outbounds.
-    #[serde(default)]
-    pub filter: Vec<usize>,
-}
-
-fn default_output() -> String {
-    "./out/config.json".to_string()
-}
-
-fn default_target_version() -> String {
-    format!("{}.{}", LATEST_VERSION.0, LATEST_VERSION.1)
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_cache_ttl() -> u64 {
-    60
-}
-
-// ============================================================================
-// Sing-box Subscription Format
-// ============================================================================
-
-/// Sing-box format subscription response
-/// Contains only outbounds array
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SingBoxSubscription {
-    /// Outbound configurations from subscription
-    #[serde(default)]
-    pub outbounds: Vec<Outbound>,
-}
-
-// ============================================================================
-// Generator Implementation
-// ============================================================================
-
-impl GeneratorConfig {
-    /// Parse generator config from TOML string
-    pub fn from_toml(content: &str) -> Result<Self> {
-        let config: GeneratorConfig =
-            toml::from_str(content).context("Failed to parse generator config TOML")?;
-
-        // Validate required fields
-        if config.subscriptions.is_empty() {
-            anyhow::bail!("At least one subscription is required");
-        }
-
-        // Validate target_version
-        SingBoxVersion::from_str(&config.target_version).map_err(|e| {
-            anyhow::anyhow!("Invalid target_version: {}: {}", config.target_version, e)
-        })?;
-
-        // Validate WebDAV config if enabled
-        config.get_webdav_config().validate()?;
-
-        Ok(config)
-    }
-
-    /// Get the WebDAV configuration from generator config fields
-    pub fn get_webdav_config(&self) -> WebDavConfig {
-        WebDavConfig {
-            webdav_upload: self.webdav_upload,
-            webdav_url: self.webdav_url.clone(),
-            webdav_username: self.webdav_username.clone(),
-            webdav_password: self.webdav_password.clone(),
-            upload_path: self.upload_path.clone(),
-        }
-    }
-
-    /// Get the parsed target version.
-    pub fn get_target_version(&self) -> SingBoxVersion {
-        // Safe to unwrap because we validated in from_toml
-        SingBoxVersion::from_str(&self.target_version).unwrap_or_else(|_| SingBoxVersion::latest())
-    }
-
-    /// Load generator config from file path
-    pub async fn from_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .with_context(|| format!("Failed to read generator config from {:?}", path))?;
-        Self::from_toml(&content)
-    }
-
-    /// Load generator config from file path or URL
-    pub async fn load(path_or_url: &str) -> Result<Self> {
-        if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
-            Self::from_url(path_or_url).await
-        } else {
-            // Expand ~ to home directory
-            let expanded = expand_tilde(path_or_url);
-            Self::from_file(Path::new(&expanded)).await
-        }
-    }
-
-    /// Load generator config from URL
-    pub async fn from_url(url: &str) -> Result<Self> {
-        let content = fetch_text(url).await?;
-        Self::from_toml(&content)
-    }
-}
 
 /// Generator that orchestrates the config generation process
 pub struct Generator {
     config: GeneratorConfig,
+    cache: CacheManager,
 }
 
 impl Generator {
     /// Create a new generator with the given config
     pub fn new(config: GeneratorConfig) -> Self {
-        Self { config }
+        let cache_dir = get_cache_dir_from_output(&config.output);
+        let cache = CacheManager::new(cache_dir, config.cache_ttl, config.cache_subscription);
+        Self { config, cache }
     }
 
     /// Load generator from path or URL
@@ -453,159 +285,6 @@ impl Generator {
         Ok(config)
     }
 
-    /// Get the cache directory path (same directory as output file)
-    fn get_cache_dir(&self) -> PathBuf {
-        let expanded_output = expand_tilde(&self.config.output);
-        let output_path = Path::new(&expanded_output);
-        output_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-
-    /// Get the cache file path for a subscription
-    fn get_cache_path(&self, subscription_name: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir();
-        // Sanitize subscription name for use as filename
-        let safe_name: String = subscription_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        cache_dir.join(format!("{}.cache.json", safe_name))
-    }
-
-    /// Check if a cached subscription is still valid (within TTL)
-    fn is_cache_valid(&self, cache_path: &Path) -> bool {
-        if !self.config.cache_subscription {
-            return false;
-        }
-
-        if let Ok(metadata) = std::fs::metadata(cache_path)
-            && let Ok(modified) = metadata.modified()
-            && let Ok(elapsed) = SystemTime::now().duration_since(modified)
-        {
-            let ttl = Duration::from_secs(self.config.cache_ttl * 60);
-            return elapsed < ttl;
-        }
-        false
-    }
-
-    /// Load outbounds from cache file
-    async fn load_from_cache(&self, cache_path: &Path) -> Result<Vec<Outbound>> {
-        let content = tokio::fs::read_to_string(cache_path)
-            .await
-            .with_context(|| format!("Failed to read cache file: {}", cache_path.display()))?;
-
-        let subscription: SingBoxSubscription = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse cache file: {}", cache_path.display()))?;
-
-        Ok(subscription.outbounds)
-    }
-
-    /// Load outbounds from cache file if it exists (regardless of TTL)
-    /// Used for diffing purposes
-    async fn load_from_cache_if_exists(&self, cache_path: &Path) -> Option<Vec<Outbound>> {
-        if !cache_path.exists() {
-            return None;
-        }
-
-        match tokio::fs::read_to_string(cache_path).await {
-            Ok(content) => match serde_json::from_str::<SingBoxSubscription>(&content) {
-                Ok(subscription) => Some(subscription.outbounds),
-                Err(e) => {
-                    debug!("Failed to parse cache file for diff: {}", e);
-                    None
-                }
-            },
-            Err(e) => {
-                debug!("Failed to read cache file for diff: {}", e);
-                None
-            }
-        }
-    }
-
-    /// Save outbounds to cache file
-    async fn save_to_cache(&self, cache_path: &Path, outbounds: &[Outbound]) -> Result<()> {
-        // Ensure cache directory exists
-        if let Some(parent) = cache_path.parent() {
-            tokio::fs::create_dir_all(parent).await.with_context(|| {
-                format!("Failed to create cache directory: {}", parent.display())
-            })?;
-        }
-
-        let subscription = SingBoxSubscription {
-            outbounds: outbounds.to_vec(),
-        };
-
-        let content = serde_json::to_string_pretty(&subscription)
-            .context("Failed to serialize outbounds for cache")?;
-
-        tokio::fs::write(cache_path, content)
-            .await
-            .with_context(|| format!("Failed to write cache file: {}", cache_path.display()))?;
-
-        debug!(
-            "Saved {} outbounds to cache: {}",
-            outbounds.len(),
-            cache_path.display()
-        );
-        Ok(())
-    }
-
-    /// Diff two sets of outbounds and log the differences
-    fn diff_outbounds(&self, subscription_name: &str, old: &[Outbound], new: &[Outbound]) {
-        use crate::transform::get_outbound_tag;
-
-        let old_tags: HashSet<String> = old
-            .iter()
-            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
-            .collect();
-
-        let new_tags: HashSet<String> = new
-            .iter()
-            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
-            .collect();
-
-        let added: Vec<&String> = new_tags.difference(&old_tags).collect();
-        let removed: Vec<&String> = old_tags.difference(&new_tags).collect();
-
-        if added.is_empty() && removed.is_empty() {
-            info!(
-                "Subscription '{}': No changes ({} outbounds)",
-                subscription_name,
-                new_tags.len()
-            );
-            return;
-        }
-
-        info!(
-            "Subscription '{}' changes: +{} added, -{} removed",
-            subscription_name,
-            added.len(),
-            removed.len()
-        );
-
-        if !added.is_empty() {
-            info!("  Added ({}):", added.len());
-            for tag in &added {
-                info!("    + {}", tag);
-            }
-        }
-
-        if !removed.is_empty() {
-            info!("  Removed ({}):", removed.len());
-            for tag in &removed {
-                info!("    - {}", tag);
-            }
-        }
-    }
-
     /// Fetch all subscriptions and collect their outbounds with subscription names.
     ///
     /// Returns a vector of (subscription_name, outbounds) tuples.
@@ -617,8 +296,8 @@ impl Generator {
 
         for (index, sub) in self.config.subscriptions.iter().enumerate() {
             // Check cache first if caching is enabled
-            let cache_path = self.get_cache_path(&sub.name);
-            let use_cache = self.is_cache_valid(&cache_path);
+            let cache_path = self.cache.get_cache_path(&sub.name);
+            let use_cache = self.cache.is_cache_valid(&cache_path);
 
             if use_cache {
                 info!(
@@ -627,7 +306,7 @@ impl Generator {
                     total_subscriptions,
                     sub.name
                 );
-                match self.load_from_cache(&cache_path).await {
+                match self.cache.load_from_cache(&cache_path).await {
                     Ok(outbounds) => {
                         info!(
                             "Loaded {} outbounds from cache for '{}'",
@@ -662,9 +341,9 @@ impl Generator {
                     // Diff with cached version if enabled and cache exists
                     if self.config.diff_subscription {
                         if let Some(cached_outbounds) =
-                            self.load_from_cache_if_exists(&cache_path).await
+                            self.cache.load_from_cache_if_exists(&cache_path).await
                         {
-                            self.diff_outbounds(&sub.name, &cached_outbounds, &outbounds);
+                            log_diff(&sub.name, &cached_outbounds, &outbounds);
                         } else {
                             info!(
                                 "Subscription '{}': First fetch, {} outbounds",
@@ -675,8 +354,8 @@ impl Generator {
                     }
 
                     // Save to cache if caching is enabled (before filtering)
-                    if self.config.cache_subscription
-                        && let Err(e) = self.save_to_cache(&cache_path, &outbounds).await
+                    if self.cache.is_enabled()
+                        && let Err(e) = self.cache.save_to_cache(&cache_path, &outbounds).await
                     {
                         warn!("Failed to save cache for '{}': {}", sub.name, e);
                     }
@@ -690,11 +369,12 @@ impl Generator {
                         outbounds.len()
                     );
                     for outbound in &outbounds {
-                        let tag = crate::transform::get_outbound_tag(outbound)
+                        let tag = get_outbound_tag(outbound)
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "<no tag>".to_string());
                         debug!("  - {}: {}", sub.name, tag);
                     }
+
                     results.push((sub.name.clone(), outbounds));
                 }
                 Err(e) => {
@@ -780,97 +460,52 @@ impl Generator {
             }
         }
     }
-}
 
-// ============================================================================
-// Utility Functions
-// ============================================================================
+    /// Diff two sets of outbounds and log the differences (legacy method for compatibility)
+    #[allow(dead_code)]
+    fn diff_outbounds(&self, subscription_name: &str, old: &[Outbound], new: &[Outbound]) {
+        let old_tags: HashSet<String> = old
+            .iter()
+            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+            .collect();
 
-/// Fetch text content from a URL
-async fn fetch_text(url: &str) -> Result<String> {
-    debug!("Fetching URL: {}", url);
+        let new_tags: HashSet<String> = new
+            .iter()
+            .filter_map(|o| get_outbound_tag(o).map(|s| s.to_string()))
+            .collect();
 
-    let client = reqwest::Client::builder()
-        .user_agent(format!("turntable/{}", get_version()))
-        .build()
-        .context("Failed to build HTTP client")?;
+        let added: Vec<&String> = new_tags.difference(&old_tags).collect();
+        let removed: Vec<&String> = old_tags.difference(&new_tags).collect();
 
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("Failed to fetch URL: {}", url))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("HTTP request failed with status {}: {}", status, url);
-    }
-
-    let text = response
-        .text()
-        .await
-        .with_context(|| format!("Failed to read response body from: {}", url))?;
-
-    Ok(text)
-}
-
-/// Prompt user to select a default outbound for the detour selector.
-///
-/// Returns `Some(tag)` if user selects an outbound, `None` if user skips.
-fn prompt_detour_default(outbound_tags: &[String]) -> Option<String> {
-    use dialoguer::{Select, theme::ColorfulTheme};
-
-    if outbound_tags.is_empty() {
-        return None;
-    }
-
-    // Add "Skip (no default)" option at the beginning
-    let mut items: Vec<&str> = vec!["(Skip - no default)"];
-    items.extend(outbound_tags.iter().map(|s| s.as_str()));
-
-    println!();
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select default outbound for detour selector")
-        .items(&items)
-        .default(0)
-        .interact();
-
-    match selection {
-        Ok(0) => {
-            info!("User skipped selecting default outbound");
-            None
+        if added.is_empty() && removed.is_empty() {
+            info!(
+                "Subscription '{}': No changes ({} outbounds)",
+                subscription_name,
+                new_tags.len()
+            );
+            return;
         }
-        Ok(idx) => {
-            let selected = outbound_tags[idx - 1].clone();
-            info!("User selected default outbound: {}", selected);
-            Some(selected)
-        }
-        Err(e) => {
-            warn!("Failed to get user selection: {}, skipping default", e);
-            None
-        }
-    }
-}
 
-/// Expand ~ to home directory in path
-fn expand_tilde(path: &str) -> String {
-    if (path.starts_with("~/") || path == "~")
-        && let Some(home) = dirs_home()
-    {
-        return path.replacen("~", &home, 1);
-    }
-    path.to_string()
-}
+        info!(
+            "Subscription '{}' changes: +{} added, -{} removed",
+            subscription_name,
+            added.len(),
+            removed.len()
+        );
 
-/// Get home directory path
-fn dirs_home() -> Option<String> {
-    #[cfg(windows)]
-    {
-        std::env::var("USERPROFILE").ok()
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("HOME").ok()
+        if !added.is_empty() {
+            info!("  Added ({}):", added.len());
+            for tag in &added {
+                info!("    + {}", tag);
+            }
+        }
+
+        if !removed.is_empty() {
+            info!("  Removed ({}):", removed.len());
+            for tag in &removed {
+                info!("    - {}", tag);
+            }
+        }
     }
 }
 
@@ -880,6 +515,8 @@ fn dirs_home() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::version::SingBoxVersion;
+
     use super::*;
 
     const EXAMPLE_GENERATOR_TOML: &str = r#"
@@ -1024,7 +661,7 @@ url = "https://example.com/sub1"
         let path = "~/config/test.toml";
         let expanded = expand_tilde(path);
         // Should not start with ~ anymore if home is set
-        if dirs_home().is_some() {
+        if helpers::dirs_home().is_some() {
             assert!(!expanded.starts_with("~/"));
         }
     }

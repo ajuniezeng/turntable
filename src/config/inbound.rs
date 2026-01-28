@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::config::serde_helpers::{is_false, is_zero_u32, string_or_vec};
 use crate::config::shared::{InboundTlsConfig, ListenFields};
-use crate::config::util::{is_false, is_zero_u32, string_or_vec};
 
 // ============================================================================
 // Inbound Enum

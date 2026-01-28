@@ -132,7 +132,7 @@ enum StringOrVec {
 /// ```ignore
 /// #[derive(Deserialize)]
 /// struct Rule {
-///     #[serde(default, deserialize_with = "crate::config::util::string_or_vec")]
+///     #[serde(default, deserialize_with = "crate::config::serde_helpers::string_or_vec")]
 ///     rule_set: Vec<String>,
 /// }
 /// ```
@@ -186,7 +186,7 @@ enum U16OrVec {
 /// ```ignore
 /// #[derive(Deserialize)]
 /// struct Rule {
-///     #[serde(default, deserialize_with = "crate::config::util::u16_or_vec")]
+///     #[serde(default, deserialize_with = "crate::config::serde_helpers::u16_or_vec")]
 ///     port: Vec<u16>,
 /// }
 /// ```

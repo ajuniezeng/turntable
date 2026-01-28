@@ -20,9 +20,9 @@ pub mod log;
 pub mod ntp;
 pub mod outbound;
 pub mod route;
+pub mod serde_helpers;
 pub mod service;
 pub mod shared;
-pub mod util;
 pub mod validation;
 pub mod version;
 

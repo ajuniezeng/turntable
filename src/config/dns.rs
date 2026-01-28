@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::config::serde_helpers::{is_false, string_or_vec};
 use crate::config::shared::DialFields;
-use crate::config::util::{is_false, string_or_vec};
 
 /// DNS configuration for sing-box
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
