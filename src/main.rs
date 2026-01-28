@@ -13,7 +13,7 @@ async fn main() {
     let is_verbose = args.verbose;
     tracing_subscriber::fmt()
         .with_max_level(if is_verbose {
-            Level::DEBUG
+            Level::TRACE
         } else {
             Level::INFO
         })

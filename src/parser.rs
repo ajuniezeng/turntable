@@ -3,7 +3,7 @@
 //! This module provides functionality for:
 //! - Detecting subscription content types (Sing-box JSON, Base64 URI list, Clash YAML)
 //! - Decoding content (handling Base64 encoding with various line break scenarios)
-//! - Parsing protocol URIs (ss://, vmess://, vless://, trojan://, hysteria2://, tuic://)
+//! - Parsing protocol URIs (ss://, vmess://, vless://, trojan://, hysteria2://, tuic://, anytls://)
 //! - Dynamic dispatch to appropriate parsers based on detected type
 
 pub mod base64;
@@ -14,8 +14,8 @@ pub mod protocols;
 pub use base64::{decode_base64, decode_subscription_content};
 pub use detection::{SubscriptionType, detect_subscription_type};
 pub use protocols::{
-    Hysteria2Parser, ProtocolParser, ProtocolRegistry, ShadowsocksParser, TrojanParser, TuicParser,
-    VLessParser, VMessParser,
+    AnyTlsParser, Hysteria2Parser, ProtocolParser, ProtocolRegistry, ShadowsocksParser,
+    TrojanParser, TuicParser, VLessParser, VMessParser,
 };
 
 use anyhow::{Result, bail};

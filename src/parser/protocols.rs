@@ -4,6 +4,7 @@
 //! Each parser implements the `ProtocolParser` trait to provide a consistent
 //! interface for parsing proxy URIs into sing-box outbound configurations.
 
+mod anytls;
 mod hysteria2;
 mod shadowsocks;
 mod trojan;
@@ -11,6 +12,7 @@ mod tuic;
 mod vless;
 mod vmess;
 
+pub use anytls::AnyTlsParser;
 pub use hysteria2::Hysteria2Parser;
 pub use shadowsocks::ShadowsocksParser;
 pub use trojan::TrojanParser;
@@ -72,6 +74,7 @@ impl ProtocolRegistry {
         registry.register(Arc::new(Hysteria2Parser::new("hysteria2")));
         registry.register(Arc::new(Hysteria2Parser::new("hy2")));
         registry.register(Arc::new(TuicParser));
+        registry.register(Arc::new(AnyTlsParser));
         registry
     }
 
@@ -220,6 +223,7 @@ mod tests {
         assert!(registry.get("hysteria2").is_some());
         assert!(registry.get("hy2").is_some());
         assert!(registry.get("tuic").is_some());
+        assert!(registry.get("anytls").is_some());
     }
 
     #[test]
