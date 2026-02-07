@@ -409,11 +409,12 @@ pub struct FakeIp {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum DnsRule {
+    /// Logical rule combining multiple rules (must be tried first by serde
+    /// because DefaultDnsRule has all-optional fields and would match anything)
+    Logical(LogicalDnsRule),
+
     /// Default rule with match conditions
     Default(Box<DefaultDnsRule>),
-
-    /// Logical rule combining multiple rules
-    Logical(LogicalDnsRule),
 }
 
 /// Default DNS rule with match conditions
@@ -774,6 +775,7 @@ pub enum DnsRuleAction {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LegacyRouteAction {
     /// Target DNS server tag (required for legacy format)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub server: String,
 
     /// Domain strategy for this query
@@ -1001,6 +1003,42 @@ mod tests {
             result.is_ok(),
             "Failed to parse DnsRuleAction legacy: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn test_logical_dns_rule_roundtrip() {
+        let json = r#"{
+            "type": "logical",
+            "mode": "and",
+            "rules": [
+                { "query_type": ["A", "AAAA"] },
+                { "rule_set": "geosite-geolocation-!cn" }
+            ],
+            "server": "secure"
+        }"#;
+
+        let rule: DnsRule = serde_json::from_str(json).unwrap();
+
+        // Must be deserialized as Logical, not Default
+        assert!(
+            matches!(rule, DnsRule::Logical(_)),
+            "Expected DnsRule::Logical, got DnsRule::Default"
+        );
+
+        // Round-trip: mode and rules must survive serialization
+        let output = serde_json::to_string(&rule).unwrap();
+        assert!(
+            output.contains("\"mode\""),
+            "Missing 'mode' in output: {output}"
+        );
+        assert!(
+            output.contains("\"rules\""),
+            "Missing 'rules' in output: {output}"
+        );
+        assert!(
+            output.contains("\"server\""),
+            "Missing 'server' in output: {output}"
         );
     }
 }
