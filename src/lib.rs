@@ -6,5 +6,5 @@ pub mod transform;
 pub mod webdav;
 
 pub fn get_version() -> String {
-    "0.3.7".to_string()
+    "0.3.8".to_string()
 }
