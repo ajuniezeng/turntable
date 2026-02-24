@@ -163,7 +163,7 @@ impl ShadowsocksParser {
     ///
     /// | Deprecated name  | Replaced with  | Reason                                        |
     /// |------------------|----------------|-----------------------------------------------|
-    /// | `simple-obfs`    | `v2ray-plugin` | `simple-obfs` is unmaintained; v2ray-plugin   |
+    /// | `simple-obfs`    | `obfs-local` | `simple-obfs` is unmaintained; obfs-local   |
     /// |                  |                | is the recommended modern replacement          |
     fn normalize_plugin(&self, plugin: String) -> String {
         match plugin.as_str() {
@@ -171,10 +171,10 @@ impl ShadowsocksParser {
             "simple-obfs" => {
                 warn!(
                     deprecated = "simple-obfs",
-                    replacement = "v2ray-plugin",
+                    replacement = "obfs-local",
                     "Deprecated SIP003 plugin substituted with supported alternative"
                 );
-                "v2ray-plugin".to_string()
+                "obfs-local".to_string()
             }
             // Already a supported plugin — pass through unchanged
             "obfs-local" | "v2ray-plugin" => plugin,
@@ -323,7 +323,7 @@ mod tests {
         let outbound = parser.parse(uri).unwrap();
 
         if let Outbound::Shadowsocks(ss) = outbound {
-            assert_eq!(ss.plugin, Some("v2ray-plugin".to_string()));
+            assert_eq!(ss.plugin, Some("obfs-local".to_string()));
             assert_eq!(
                 ss.plugin_opts,
                 Some("obfs=http;obfs-host=example.com".to_string())
@@ -341,7 +341,7 @@ mod tests {
         let outbound = parser.parse(uri).unwrap();
 
         if let Outbound::Shadowsocks(ss) = outbound {
-            assert_eq!(ss.plugin, Some("v2ray-plugin".to_string()));
+            assert_eq!(ss.plugin, Some("obfs-local".to_string()));
             assert_eq!(ss.plugin_opts, None);
         } else {
             panic!("Expected Shadowsocks outbound");
