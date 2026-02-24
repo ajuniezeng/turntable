@@ -1,10 +1,10 @@
 //! Shadowsocks protocol parser
 //!
 //! This module provides parsing for Shadowsocks (ss://) URIs.
-//! Supports both SIP002 format and legacy format.
+//! Supports both SIP002 format and legacy format, as well as SIP003 plugins.
 
 use anyhow::{Context, Result, anyhow};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::config::outbound::{Outbound, ShadowsocksOutbound};
 use crate::config::shared::DialFields;
@@ -18,9 +18,10 @@ use super::{ProtocolParser, parse_host_port};
 
 /// Parser for Shadowsocks (ss://) URIs
 ///
-/// Supports both SIP002 format and legacy format:
+/// Supports both SIP002 format and legacy format, as well as SIP003 plugins:
 /// - SIP002: ss://BASE64(method:password)@host:port#tag
 /// - SIP002 with userinfo: ss://method:password@host:port#tag
+/// - SIP002 with SIP003 plugin: ss://userinfo@host:port/?plugin=plugin-name;plugin-opts#tag
 /// - Legacy: ss://BASE64(method:password@host:port)#tag
 pub struct ShadowsocksParser;
 
@@ -63,6 +64,7 @@ impl ProtocolParser for ShadowsocksParser {
 
 impl ShadowsocksParser {
     /// Parses SIP002 format: BASE64(method:password)@host:port or method:password@host:port
+    /// Also handles SIP003 plugin query parameter: host:port/?plugin=plugin-name;plugin-opts
     fn parse_sip002(
         &self,
         main_part: &str,
@@ -70,13 +72,28 @@ impl ShadowsocksParser {
         tag: Option<String>,
     ) -> Result<Outbound> {
         let userinfo = &main_part[..at_pos];
-        let hostport = &main_part[at_pos + 1..];
+        let hostport_and_query = &main_part[at_pos + 1..];
+
+        // Split off query string if present: host:port/?plugin=... or host:port?plugin=...
+        let (hostport_raw, query_string) = match hostport_and_query.find('?') {
+            Some(q_pos) => (
+                &hostport_and_query[..q_pos],
+                Some(&hostport_and_query[q_pos + 1..]),
+            ),
+            None => (hostport_and_query, None),
+        };
+
+        // Strip trailing slash that may appear before the query string
+        let hostport = hostport_raw.trim_end_matches('/');
 
         // Parse host:port
         let (server, server_port) = parse_host_port(hostport)?;
 
         // Decode userinfo (might be Base64 or plain method:password)
         let (method, password) = self.parse_userinfo(userinfo)?;
+
+        // Parse SIP003 plugin from query string
+        let (plugin, plugin_opts) = self.parse_plugin_query(query_string);
 
         let final_tag = tag.unwrap_or_else(|| format!("{}:{}", server, server_port));
 
@@ -86,13 +103,90 @@ impl ShadowsocksParser {
             server_port: Some(server_port),
             method: Some(method),
             password: Some(password),
-            plugin: None,
-            plugin_opts: None,
+            plugin,
+            plugin_opts,
             network: None,
             udp_over_tcp: None,
             multiplex: None,
             dial: DialFields::default(),
         }))
+    }
+
+    /// Parses the SIP003 `plugin` query parameter from a query string.
+    ///
+    /// The plugin parameter format is: `plugin=plugin-name;plugin-opts`
+    /// where the first `;` separates the plugin name from its options.
+    ///
+    /// Examples:
+    /// - `plugin=obfs-local;obfs=http;obfs-host=example.com`
+    ///   → plugin: `obfs-local`, opts: `obfs=http;obfs-host=example.com`
+    /// - `plugin=v2ray-plugin;server;tls;host=example.com`
+    ///   → plugin: `v2ray-plugin`, opts: `server;tls;host=example.com`
+    fn parse_plugin_query(&self, query_string: Option<&str>) -> (Option<String>, Option<String>) {
+        let query = match query_string {
+            Some(q) if !q.is_empty() => q,
+            _ => return (None, None),
+        };
+
+        for param in query.split('&') {
+            if let Some(raw_value) = param.strip_prefix("plugin=") {
+                let decoded = urlencoding::decode(raw_value)
+                    .unwrap_or_else(|_| raw_value.into())
+                    .into_owned();
+
+                if decoded.is_empty() {
+                    return (None, None);
+                }
+
+                // First ';' separates the plugin name from its options
+                return match decoded.find(';') {
+                    Some(semi_pos) => {
+                        let plugin = self.normalize_plugin(decoded[..semi_pos].to_string());
+                        let opts = decoded[semi_pos + 1..].to_string();
+                        (
+                            Some(plugin),
+                            if opts.is_empty() { None } else { Some(opts) },
+                        )
+                    }
+                    None => (Some(self.normalize_plugin(decoded)), None),
+                };
+            }
+        }
+
+        (None, None)
+    }
+
+    /// Maps deprecated or unsupported SIP003 plugin names to their supported equivalents.
+    ///
+    /// sing-box only supports `obfs-local` and `v2ray-plugin`. Any other plugin name
+    /// is substituted with the closest supported alternative and a warning is emitted.
+    ///
+    /// | Deprecated name  | Replaced with  | Reason                                        |
+    /// |------------------|----------------|-----------------------------------------------|
+    /// | `simple-obfs`    | `v2ray-plugin` | `simple-obfs` is unmaintained; v2ray-plugin   |
+    /// |                  |                | is the recommended modern replacement          |
+    fn normalize_plugin(&self, plugin: String) -> String {
+        match plugin.as_str() {
+            // simple-obfs is deprecated; v2ray-plugin is the supported replacement
+            "simple-obfs" => {
+                warn!(
+                    deprecated = "simple-obfs",
+                    replacement = "v2ray-plugin",
+                    "Deprecated SIP003 plugin substituted with supported alternative"
+                );
+                "v2ray-plugin".to_string()
+            }
+            // Already a supported plugin — pass through unchanged
+            "obfs-local" | "v2ray-plugin" => plugin,
+            // Unknown plugin — warn but preserve as-is so the user can decide
+            other => {
+                warn!(
+                    plugin = other,
+                    "Unknown SIP003 plugin; only 'obfs-local' and 'v2ray-plugin' are supported by sing-box"
+                );
+                plugin
+            }
+        }
     }
 
     /// Parses legacy format: BASE64(method:password@host:port)
@@ -166,6 +260,126 @@ impl ShadowsocksParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shadowsocks_sip003_plugin() {
+        let parser = ShadowsocksParser;
+        // obfs-local plugin with options
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#sip003-test";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.tag, Some("sip003-test".to_string()));
+            assert_eq!(ss.server, Some("example.com".to_string()));
+            assert_eq!(ss.server_port, Some(8388));
+            assert_eq!(ss.method, Some("aes-256-gcm".to_string()));
+            assert_eq!(ss.password, Some("password".to_string()));
+            assert_eq!(ss.plugin, Some("obfs-local".to_string()));
+            assert_eq!(
+                ss.plugin_opts,
+                Some("obfs=http;obfs-host=example.com".to_string())
+            );
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_sip003_plugin_no_slash() {
+        let parser = ShadowsocksParser;
+        // Query string without leading slash
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388?plugin=obfs-local%3Bobfs%3Dtls#sip003-noslash";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, Some("obfs-local".to_string()));
+            assert_eq!(ss.plugin_opts, Some("obfs=tls".to_string()));
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_sip003_plugin_name_only() {
+        let parser = ShadowsocksParser;
+        // Plugin with no options
+        let uri =
+            "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=obfs-local#plugin-only";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, Some("obfs-local".to_string()));
+            assert_eq!(ss.plugin_opts, None);
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_sip003_simple_obfs_renamed() {
+        let parser = ShadowsocksParser;
+        // simple-obfs is deprecated and should be silently remapped to v2ray-plugin
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#simple-obfs-test";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, Some("v2ray-plugin".to_string()));
+            assert_eq!(
+                ss.plugin_opts,
+                Some("obfs=http;obfs-host=example.com".to_string())
+            );
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_sip003_simple_obfs_name_only() {
+        let parser = ShadowsocksParser;
+        // simple-obfs without options should also be remapped
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=simple-obfs#simple-obfs-noopt";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, Some("v2ray-plugin".to_string()));
+            assert_eq!(ss.plugin_opts, None);
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_sip003_v2ray_plugin() {
+        let parser = ShadowsocksParser;
+        // v2ray-plugin with multiple semicolon-separated options
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=v2ray-plugin%3Bserver%3Btls%3Bhost%3Dexample.com#v2ray-plugin-test";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, Some("v2ray-plugin".to_string()));
+            assert_eq!(
+                ss.plugin_opts,
+                Some("server;tls;host=example.com".to_string())
+            );
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
+
+    #[test]
+    fn test_shadowsocks_no_plugin() {
+        let parser = ShadowsocksParser;
+        // Normal SIP002 without plugin
+        let uri = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388#no-plugin";
+        let outbound = parser.parse(uri).unwrap();
+
+        if let Outbound::Shadowsocks(ss) = outbound {
+            assert_eq!(ss.plugin, None);
+            assert_eq!(ss.plugin_opts, None);
+        } else {
+            panic!("Expected Shadowsocks outbound");
+        }
+    }
 
     #[test]
     fn test_shadowsocks_sip002_base64_userinfo() {
