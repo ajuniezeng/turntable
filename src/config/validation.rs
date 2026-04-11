@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::SingBoxConfig;
 use crate::config::dns::{DnsRule, DnsServer};
+use crate::config::inbound::Inbound;
 use crate::config::outbound::Outbound;
 use crate::config::route::{RouteRule, RuleAction, RuleSet};
 use crate::config::version::SingBoxVersion;
@@ -97,6 +98,14 @@ pub enum ConfigError {
         rule_index: usize,
         /// The referenced rule-set tag.
         rule_set: String,
+    },
+
+    /// DNS rule is invalid for the target version or rule semantics.
+    InvalidDnsRule {
+        /// The rule index (0-based).
+        rule_index: usize,
+        /// Details about the invalid rule.
+        message: String,
     },
 }
 
@@ -297,11 +306,89 @@ impl fmt::Display for ConfigError {
                     "route rule #{rule_num} references non-existent rule-set '{rule_set}'"
                 )
             }
+            Self::InvalidDnsRule {
+                rule_index,
+                message,
+            } => {
+                let rule_num = rule_index + 1;
+                write!(f, "DNS rule #{rule_num} is invalid: {message}")
+            }
         }
     }
 }
 
 impl std::error::Error for ConfigError {}
+
+fn dns_rule_has_response_fields(rule: &crate::config::dns::DefaultDnsRule) -> bool {
+    rule.response_rcode.is_some()
+        || !rule.response_answer.is_empty()
+        || !rule.response_ns.is_empty()
+        || !rule.response_extra.is_empty()
+}
+
+fn dns_rule_action_uses_legacy_strategy(action: &crate::config::dns::DnsRuleAction) -> bool {
+    match action {
+        crate::config::dns::DnsRuleAction::Legacy(action) => action.strategy.is_some(),
+        crate::config::dns::DnsRuleAction::Tagged(
+            crate::config::dns::TaggedDnsRuleAction::Route(action),
+        ) => action.strategy.is_some(),
+        _ => false,
+    }
+}
+
+fn dns_rule_uses_legacy_address_filters(rule: &crate::config::dns::DefaultDnsRule) -> bool {
+    (!rule.ip_cidr.is_empty() || rule.ip_is_private) && !rule.match_response
+        || rule.rule_set_ip_cidr_accept_empty
+        || dns_rule_action_uses_legacy_strategy(&rule.action)
+}
+
+fn dns_rule_action_is_evaluate(rule: &DnsRule) -> bool {
+    match rule {
+        DnsRule::Default(rule) => matches!(
+            &rule.action,
+            crate::config::dns::DnsRuleAction::Tagged(
+                crate::config::dns::TaggedDnsRuleAction::Evaluate(_)
+            )
+        ),
+        DnsRule::Logical(rule) => matches!(
+            &rule.action,
+            crate::config::dns::DnsRuleAction::Tagged(
+                crate::config::dns::TaggedDnsRuleAction::Evaluate(_)
+            )
+        ),
+    }
+}
+
+fn dns_rule_has_ip_version_or_query_type(rule: &DnsRule) -> bool {
+    match rule {
+        DnsRule::Default(rule) => rule.ip_version.is_some() || !rule.query_type.is_empty(),
+        DnsRule::Logical(rule) => rule.rules.iter().any(dns_rule_has_ip_version_or_query_type),
+    }
+}
+
+fn collect_dns_rule_set_refs(rule: &DnsRule, refs: &mut HashSet<String>) {
+    match rule {
+        DnsRule::Default(rule) => {
+            refs.extend(rule.rule_set.iter().cloned());
+        }
+        DnsRule::Logical(rule) => {
+            for nested_rule in &rule.rules {
+                collect_dns_rule_set_refs(nested_rule, refs);
+            }
+        }
+    }
+}
+
+fn rule_set_contains_query_type(rule_set: &RuleSet) -> bool {
+    match rule_set {
+        RuleSet::Inline(rule_set) => rule_set.rules.iter().any(headless_rule_contains_query_type),
+        RuleSet::Local(_) | RuleSet::Remote(_) => false,
+    }
+}
+
+fn headless_rule_contains_query_type(rule: &crate::config::route::HeadlessRule) -> bool {
+    !rule.query_type.is_empty() || rule.rules.iter().any(headless_rule_contains_query_type)
+}
 
 // ============================================================================
 // Validation Result
@@ -719,6 +806,15 @@ impl SingBoxConfig {
             });
         }
 
+        // Check certificate providers (since 1.14)
+        if !self.certificate_providers.is_empty() && version < &SingBoxVersion::new(1, 14) {
+            result.add_warning(ConfigWarning::UnsupportedFeature {
+                feature: "certificate_providers".to_string(),
+                min_version: "1.14".to_string(),
+                target_version: version_str.clone(),
+            });
+        }
+
         // Check route-level features
         if let Some(route) = &self.route {
             // Check network_strategy (since 1.11)
@@ -758,9 +854,27 @@ impl SingBoxConfig {
             self.check_outbound_version_compatibility(outbound, version, &version_str, result);
         }
 
+        // Check inbound-specific version features
+        for inbound in &self.inbounds {
+            self.check_inbound_version_compatibility(inbound, version, &version_str, result);
+        }
+
         // Check DNS version features
         if let Some(dns) = &self.dns {
             self.check_dns_version_compatibility(dns, version, &version_str, result);
+        }
+
+        // Check experimental 1.14 features
+        if let Some(experimental) = &self.experimental
+            && let Some(cache_file) = &experimental.cache_file
+            && cache_file.store_dns
+            && version < &SingBoxVersion::new(1, 14)
+        {
+            result.add_warning(ConfigWarning::UnsupportedFeature {
+                feature: "experimental.cache_file.store_dns".to_string(),
+                min_version: "1.14".to_string(),
+                target_version: version_str.clone(),
+            });
         }
     }
 
@@ -843,6 +957,17 @@ impl SingBoxConfig {
                         target_version: version_str.to_string(),
                     });
                 }
+
+                if (h2.hop_interval_max.is_some() || h2.bbr_profile.is_some())
+                    && version < &SingBoxVersion::new(1, 14)
+                {
+                    let tag = h2.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!("hysteria2 outbound '{}' 1.14 fields", tag),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                }
             }
             _ => {}
         }
@@ -878,6 +1003,118 @@ impl SingBoxConfig {
                 });
             }
         }
+
+        if version >= &SingBoxVersion::new(1, 14) {
+            let has_domain_strategy = match outbound {
+                Outbound::Direct(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Socks(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Http(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Shadowsocks(o) => o.dial.domain_strategy.is_some(),
+                Outbound::VMess(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Trojan(o) => o.dial.domain_strategy.is_some(),
+                Outbound::WireGuard(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Hysteria(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Hysteria2(o) => o.dial.domain_strategy.is_some(),
+                Outbound::VLess(o) => o.dial.domain_strategy.is_some(),
+                Outbound::ShadowTls(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Tuic(o) => o.dial.domain_strategy.is_some(),
+                Outbound::AnyTls(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Tor(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Ssh(o) => o.dial.domain_strategy.is_some(),
+                Outbound::Naive(o) => o.dial.domain_strategy.is_some(),
+                _ => false,
+            };
+
+            if has_domain_strategy {
+                let tag = get_outbound_tag(outbound).unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::DeprecatedFeature {
+                    feature: format!("outbound '{}' dial.domain_strategy", tag),
+                    deprecated_in: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                    suggestion: Some("use dial.domain_resolver instead".to_string()),
+                });
+            }
+        }
+    }
+
+    /// Check inbound version compatibility.
+    fn check_inbound_version_compatibility(
+        &self,
+        inbound: &Inbound,
+        version: &SingBoxVersion,
+        version_str: &str,
+        result: &mut ValidationResult,
+    ) {
+        match inbound {
+            Inbound::Cloudflared(_) if version < &SingBoxVersion::new(1, 14) => {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: "cloudflared inbound".to_string(),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            Inbound::Hysteria2(inbound)
+                if inbound.bbr_profile.is_some() && version < &SingBoxVersion::new(1, 14) =>
+            {
+                let tag = inbound
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("hysteria2 inbound '{}' bbr_profile", tag),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            Inbound::Tun(inbound)
+                if (!inbound.include_mac_address.is_empty()
+                    || !inbound.exclude_mac_address.is_empty())
+                    && version < &SingBoxVersion::new(1, 14) =>
+            {
+                let tag = inbound
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("tun inbound '{}' mac address filters", tag),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            _ => {}
+        }
+
+        let tls = match inbound {
+            Inbound::Trojan(i) => i.tls.as_ref(),
+            Inbound::Naive(i) => i.tls.as_ref(),
+            Inbound::Hysteria(i) => i.tls.as_ref(),
+            Inbound::Tuic(i) => i.tls.as_ref(),
+            Inbound::Hysteria2(i) => i.tls.as_ref(),
+            Inbound::VLess(i) => i.tls.as_ref(),
+            Inbound::AnyTls(i) => i.tls.as_ref(),
+            _ => None,
+        };
+
+        if let Some(tls) = tls {
+            if tls.certificate_provider.is_some() && version < &SingBoxVersion::new(1, 14) {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: "tls.certificate_provider".to_string(),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+
+            if version >= &SingBoxVersion::new(1, 14) && tls.acme.is_some() {
+                result.add_warning(ConfigWarning::DeprecatedFeature {
+                    feature: "tls.acme".to_string(),
+                    deprecated_in: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                    suggestion: Some(
+                        "use tls.certificate_provider or certificate_providers instead".to_string(),
+                    ),
+                });
+            }
+        }
     }
 
     /// Check DNS version compatibility.
@@ -888,6 +1125,8 @@ impl SingBoxConfig {
         version_str: &str,
         result: &mut ValidationResult,
     ) {
+        let is_v14_or_newer = version >= &SingBoxVersion::new(1, 14);
+
         // Check for legacy DNS server format (deprecated in 1.12)
         for server in &dns.servers {
             if matches!(server, DnsServer::Legacy(_)) && !version.supports_legacy_dns() {
@@ -913,8 +1152,39 @@ impl SingBoxConfig {
             });
         }
 
+        if dns.optimistic.is_some() && version < &SingBoxVersion::new(1, 14) {
+            result.add_warning(ConfigWarning::UnsupportedFeature {
+                feature: "dns.optimistic".to_string(),
+                min_version: "1.14".to_string(),
+                target_version: version_str.to_string(),
+            });
+        }
+
+        if is_v14_or_newer && dns.independent_cache {
+            result.add_warning(ConfigWarning::DeprecatedFeature {
+                feature: "dns.independent_cache".to_string(),
+                deprecated_in: "1.14".to_string(),
+                target_version: version_str.to_string(),
+                suggestion: Some("remove this field".to_string()),
+            });
+        }
+
+        if is_v14_or_newer
+            && let Some(experimental) = &self.experimental
+            && let Some(cache_file) = &experimental.cache_file
+            && cache_file.store_rdrc
+        {
+            result.add_warning(ConfigWarning::DeprecatedFeature {
+                feature: "experimental.cache_file.store_rdrc".to_string(),
+                deprecated_in: "1.14".to_string(),
+                target_version: version_str.to_string(),
+                suggestion: Some("use experimental.cache_file.store_dns instead".to_string()),
+            });
+        }
+
         // Check DNS rules for deprecated outbound field
-        for rule in &dns.rules {
+        let mut seen_top_level_evaluate = false;
+        for (index, rule) in dns.rules.iter().enumerate() {
             let has_deprecated_outbound = match rule {
                 DnsRule::Default(r) => !r.outbound.is_empty(),
                 DnsRule::Logical(_) => false,
@@ -928,6 +1198,223 @@ impl SingBoxConfig {
                     suggestion: Some("use action.route.server instead".to_string()),
                 });
                 break; // Only warn once
+            }
+
+            if is_v14_or_newer {
+                self.check_dns_rule_114_compatibility(
+                    rule,
+                    index,
+                    seen_top_level_evaluate,
+                    false,
+                    result,
+                );
+                self.check_dns_rule_114_deprecations(rule, version_str, result);
+            }
+
+            if dns_rule_action_is_evaluate(rule) {
+                seen_top_level_evaluate = true;
+            }
+        }
+
+        if is_v14_or_newer {
+            let mut referenced_rule_sets = HashSet::new();
+            for rule in &dns.rules {
+                collect_dns_rule_set_refs(rule, &mut referenced_rule_sets);
+            }
+
+            let referenced_rule_set_has_query_type = self.route.as_ref().is_some_and(|route| {
+                route.rule_set.iter().any(|rule_set| {
+                    referenced_rule_sets.contains(&get_rule_set_tag(rule_set))
+                        && rule_set_contains_query_type(rule_set)
+                })
+            });
+
+            let has_ip_version_or_query_type =
+                dns.rules.iter().any(dns_rule_has_ip_version_or_query_type)
+                    || referenced_rule_set_has_query_type;
+
+            if has_ip_version_or_query_type {
+                for (index, rule) in dns.rules.iter().enumerate() {
+                    self.check_dns_rule_114_incompatibilities(rule, index, result);
+                }
+            }
+        }
+    }
+
+    /// Check 1.14 DNS rule semantics like evaluate/respond ordering and response matching.
+    fn check_dns_rule_114_compatibility(
+        &self,
+        rule: &DnsRule,
+        rule_index: usize,
+        has_preceding_top_level_evaluate: bool,
+        inside_logical: bool,
+        result: &mut ValidationResult,
+    ) {
+        match rule {
+            DnsRule::Default(rule) => {
+                let has_response_fields = dns_rule_has_response_fields(rule);
+
+                if matches!(
+                    &rule.action,
+                    crate::config::dns::DnsRuleAction::Tagged(
+                        crate::config::dns::TaggedDnsRuleAction::Evaluate(_)
+                    )
+                ) && inside_logical
+                {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "'evaluate' is only allowed on top-level DNS rules".to_string(),
+                    });
+                }
+
+                if has_response_fields && !rule.match_response {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "response match fields require 'match_response' to be set to true"
+                            .to_string(),
+                    });
+                }
+
+                if (rule.match_response || has_response_fields) && !has_preceding_top_level_evaluate
+                {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "response matching requires a preceding top-level 'evaluate' rule"
+                            .to_string(),
+                    });
+                }
+
+                if matches!(
+                    &rule.action,
+                    crate::config::dns::DnsRuleAction::Tagged(
+                        crate::config::dns::TaggedDnsRuleAction::Respond
+                    )
+                ) && !has_preceding_top_level_evaluate
+                {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "'respond' requires a preceding top-level 'evaluate' rule"
+                            .to_string(),
+                    });
+                }
+            }
+            DnsRule::Logical(logical) => {
+                if matches!(
+                    &logical.action,
+                    crate::config::dns::DnsRuleAction::Tagged(
+                        crate::config::dns::TaggedDnsRuleAction::Respond
+                    )
+                ) && !has_preceding_top_level_evaluate
+                {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "'respond' requires a preceding top-level 'evaluate' rule"
+                            .to_string(),
+                    });
+                }
+
+                for nested_rule in &logical.rules {
+                    self.check_dns_rule_114_compatibility(
+                        nested_rule,
+                        rule_index,
+                        has_preceding_top_level_evaluate,
+                        true,
+                        result,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Check 1.14 DNS incompatibilities involving ip_version/query_type and legacy fields.
+    fn check_dns_rule_114_deprecations(
+        &self,
+        rule: &DnsRule,
+        version_str: &str,
+        result: &mut ValidationResult,
+    ) {
+        match rule {
+            DnsRule::Default(rule) => {
+                if !rule.ip_cidr.is_empty() && !rule.match_response {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: "dns rule ip_cidr".to_string(),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "use 'evaluate' with 'match_response' instead".to_string(),
+                        ),
+                    });
+                }
+
+                if rule.ip_is_private && !rule.match_response {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: "dns rule ip_is_private".to_string(),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "use 'evaluate' with 'match_response' instead".to_string(),
+                        ),
+                    });
+                }
+
+                if rule.rule_set_ip_cidr_accept_empty {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: "dns rule rule_set_ip_cidr_accept_empty".to_string(),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "use 'evaluate' with 'match_response' instead".to_string(),
+                        ),
+                    });
+                }
+
+                if dns_rule_action_uses_legacy_strategy(&rule.action) {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: "dns rule action strategy".to_string(),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "remove legacy strategy from the DNS rule action".to_string(),
+                        ),
+                    });
+                }
+            }
+            DnsRule::Logical(logical) => {
+                for nested_rule in &logical.rules {
+                    self.check_dns_rule_114_deprecations(
+                        nested_rule,
+                        version_str,
+                        result,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Check 1.14 DNS incompatibilities involving ip_version/query_type and legacy fields.
+    fn check_dns_rule_114_incompatibilities(
+        &self,
+        rule: &DnsRule,
+        rule_index: usize,
+        result: &mut ValidationResult,
+    ) {
+        match rule {
+            DnsRule::Default(rule) => {
+                if dns_rule_uses_legacy_address_filters(rule) {
+                    result.add_error(ConfigError::InvalidDnsRule {
+                        rule_index,
+                        message: "'ip_version' or 'query_type' cannot be combined with legacy address filter fields, legacy DNS rule action 'strategy', or 'rule_set_ip_cidr_accept_empty' in sing-box 1.14".to_string(),
+                    });
+                }
+            }
+            DnsRule::Logical(logical) => {
+                for nested_rule in &logical.rules {
+                    self.check_dns_rule_114_incompatibilities(
+                        nested_rule,
+                        rule_index,
+                        result,
+                    );
+                }
             }
         }
     }
@@ -1313,10 +1800,15 @@ fn get_rule_action_outbound(action: &RuleAction) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::dns::{DefaultDnsRule, Dns, LocalDnsServer, UdpDnsServer};
+    use crate::config::dns::{
+        DefaultDnsRule, Dns, DnsRuleAction, LegacyRouteAction, LocalDnsServer, Strategy,
+        TaggedDnsRuleAction, UdpDnsServer,
+    };
+    use crate::config::experimental::{CacheFile, Experimental};
+    use crate::config::inbound::TrojanInbound;
     use crate::config::outbound::{BlockOutbound, DirectOutbound, SelectorOutbound, SocksOutbound};
     use crate::config::route::{InlineRuleSet, LocalRuleSet, Route, RouteAction};
-    use crate::config::shared::DialFields;
+    use crate::config::shared::{AcmeConfig, DialFields, InboundTlsConfig};
 
     #[test]
     fn test_valid_config_passes_validation() {
@@ -2116,5 +2608,191 @@ mod tests {
                 result.warnings
             );
         }
+    }
+
+    #[test]
+    fn test_version_warning_dns_114_deprecations() {
+        let config = SingBoxConfig {
+            dns: Some(Dns {
+                independent_cache: true,
+                rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
+                    ip_cidr: vec!["1.1.1.0/24".to_string()],
+                    rule_set_ip_cidr_accept_empty: true,
+                    action: DnsRuleAction::Tagged(TaggedDnsRuleAction::Route(
+                        crate::config::dns::RouteAction {
+                            server: "local".to_string(),
+                            strategy: Some(Strategy::PreferIpv4),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }))],
+                ..Default::default()
+            }),
+            experimental: Some(Experimental {
+                cache_file: Some(CacheFile {
+                    enabled: true,
+                    store_rdrc: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "dns.independent_cache" && deprecated_in == "1.14"
+        )));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "experimental.cache_file.store_rdrc" && deprecated_in == "1.14"
+        )));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "dns rule action strategy" && deprecated_in == "1.14"
+        )));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "dns rule ip_cidr" && deprecated_in == "1.14"
+        )));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "dns rule rule_set_ip_cidr_accept_empty" && deprecated_in == "1.14"
+        )));
+    }
+
+    #[test]
+    fn test_version_warning_tls_acme_deprecated_in_114() {
+        let config = SingBoxConfig {
+            inbounds: vec![Inbound::Trojan(TrojanInbound {
+                tag: Some("trojan-in".to_string()),
+                tls: Some(InboundTlsConfig {
+                    enabled: true,
+                    acme: Some(AcmeConfig {
+                        domain: vec!["example.com".to_string()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ConfigWarning::DeprecatedFeature { feature, deprecated_in, .. }
+            if feature == "tls.acme" && deprecated_in == "1.14"
+        )));
+    }
+
+    #[test]
+    fn test_validate_dns_response_matching_requires_preceding_evaluate() {
+        let config = SingBoxConfig {
+            dns: Some(Dns {
+                rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
+                    match_response: true,
+                    response_answer: vec!["example.com. 60 IN A 1.1.1.1".to_string()],
+                    ..Default::default()
+                }))],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.errors.iter().any(|error| matches!(
+            error,
+            ConfigError::InvalidDnsRule { message, .. }
+            if message.contains("preceding top-level 'evaluate' rule")
+        )));
+    }
+
+    #[test]
+    fn test_validate_dns_respond_requires_preceding_evaluate() {
+        let config = SingBoxConfig {
+            dns: Some(Dns {
+                rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
+                    action: DnsRuleAction::Tagged(TaggedDnsRuleAction::Respond),
+                    ..Default::default()
+                }))],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.errors.iter().any(|error| matches!(
+            error,
+            ConfigError::InvalidDnsRule { message, .. }
+            if message.contains("'respond' requires a preceding top-level 'evaluate' rule")
+        )));
+    }
+
+    #[test]
+    fn test_validate_dns_evaluate_not_allowed_in_logical_subrules() {
+        let config = SingBoxConfig {
+            dns: Some(Dns {
+                rules: vec![DnsRule::Logical(crate::config::dns::LogicalDnsRule {
+                    r#type: "logical".to_string(),
+                    mode: crate::config::dns::LogicalMode::And,
+                    rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
+                        action: DnsRuleAction::Tagged(TaggedDnsRuleAction::Evaluate(
+                            crate::config::dns::EvaluateAction {
+                                server: "dns".to_string(),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }))],
+                    action: DnsRuleAction::Legacy(LegacyRouteAction {
+                        server: "dns".to_string(),
+                        strategy: None,
+                        disable_cache: false,
+                        rewrite_ttl: None,
+                        client_subnet: None,
+                    }),
+                })],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.errors.iter().any(|error| matches!(
+            error,
+            ConfigError::InvalidDnsRule { message, .. }
+            if message.contains("'evaluate' is only allowed on top-level DNS rules")
+        )));
+    }
+
+    #[test]
+    fn test_validate_dns_ip_version_incompatible_with_legacy_fields() {
+        let config = SingBoxConfig {
+            dns: Some(Dns {
+                rules: vec![DnsRule::Default(Box::new(DefaultDnsRule {
+                    ip_version: Some(4),
+                    ip_cidr: vec!["1.1.1.0/24".to_string()],
+                    ..Default::default()
+                }))],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = config.validate_for_version(&SingBoxVersion::new(1, 14));
+        assert!(result.errors.iter().any(|error| matches!(
+            error,
+            ConfigError::InvalidDnsRule { message, .. }
+            if message.contains("'ip_version' or 'query_type' cannot be combined")
+        )));
     }
 }

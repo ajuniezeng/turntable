@@ -46,6 +46,14 @@ pub struct Route {
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub default_mark: i32,
 
+    /// Enable neighbor resolution for logging (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub find_neighbor: bool,
+
+    /// Custom DHCP lease files for hostname and MAC resolution (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dhcp_lease_files: Vec<String>,
+
     /// Default domain resolver (since 1.12.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_domain_resolver: Option<DomainResolver>,
@@ -352,6 +360,14 @@ pub struct RouteRule {
     )]
     pub package_name: Vec<String>,
 
+    /// Match Android package name by regular expression (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub package_name_regex: Vec<String>,
+
     /// Match user name (Linux only)
     #[serde(
         default,
@@ -395,6 +411,22 @@ pub struct RouteRule {
         deserialize_with = "string_or_vec"
     )]
     pub default_interface_address: Vec<String>,
+
+    /// Match source MAC address (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub source_mac_address: Vec<String>,
+
+    /// Match source hostname (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub source_hostname: Vec<String>,
 
     /// Match WiFi SSID
     #[serde(
@@ -965,6 +997,10 @@ pub struct ResolveAction {
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_cache: bool,
 
+    /// Disable optimistic DNS caching for this query (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_optimistic_cache: bool,
+
     /// Rewrite TTL in responses (since 1.12.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewrite_ttl: Option<u32>,
@@ -1264,6 +1300,14 @@ pub struct HeadlessRule {
         deserialize_with = "string_or_vec"
     )]
     pub package_name: Vec<String>,
+
+    /// Match Android package name by regular expression (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub package_name_regex: Vec<String>,
 
     /// Match network type (since 1.11.0, Android/Apple)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

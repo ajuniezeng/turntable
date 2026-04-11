@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
 use crate::config::serde_helpers::{is_false, string_or_vec};
@@ -39,6 +39,10 @@ pub struct Dns {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_capacity: Option<u32>,
 
+    /// Enable optimistic DNS caching (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimistic: Option<OptimisticCache>,
+
     /// Store reverse mapping of IP addresses for domain lookup during routing
     #[serde(default, skip_serializing_if = "is_false")]
     pub reverse_mapping: bool,
@@ -60,6 +64,72 @@ pub enum Strategy {
     PreferIpv6,
     Ipv4Only,
     Ipv6Only,
+}
+
+/// Optimistic DNS cache configuration (since 1.14.0).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OptimisticCache {
+    /// Whether optimistic caching is enabled.
+    pub enabled: bool,
+
+    /// Maximum time an expired cache entry can be served.
+    pub timeout: Option<String>,
+}
+
+impl Serialize for OptimisticCache {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.enabled && self.timeout.is_none() {
+            serializer.serialize_bool(true)
+        } else {
+            #[derive(Serialize)]
+            struct OptimisticCacheConfig<'a> {
+                enabled: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                timeout: &'a Option<String>,
+            }
+
+            OptimisticCacheConfig {
+                enabled: self.enabled,
+                timeout: &self.timeout,
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OptimisticCache {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct OptimisticCacheConfig {
+            enabled: bool,
+            #[serde(default)]
+            timeout: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OptimisticCacheValue {
+            Bool(bool),
+            Config(OptimisticCacheConfig),
+        }
+
+        match OptimisticCacheValue::deserialize(deserializer)? {
+            OptimisticCacheValue::Bool(enabled) => Ok(Self {
+                enabled,
+                timeout: None,
+            }),
+            OptimisticCacheValue::Config(config) => Ok(Self {
+                enabled: config.enabled,
+                timeout: config.timeout,
+            }),
+        }
+    }
 }
 
 /// DNS Server configuration - supports multiple server types
@@ -577,6 +647,14 @@ pub struct DefaultDnsRule {
     )]
     pub package_name: Vec<String>,
 
+    /// Match Android package name by regular expression (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub package_name_regex: Vec<String>,
+
     /// Match user name (Linux only)
     #[serde(
         default,
@@ -625,6 +703,22 @@ pub struct DefaultDnsRule {
     )]
     pub default_interface_address: Vec<String>,
 
+    /// Match source MAC address (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub source_mac_address: Vec<String>,
+
+    /// Match source hostname (since 1.14.0)
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub source_hostname: Vec<String>,
+
     /// Match WiFi SSID
     #[serde(
         default,
@@ -653,9 +747,29 @@ pub struct DefaultDnsRule {
     #[serde(default, skip_serializing_if = "is_false")]
     pub rule_set_ip_cidr_match_source: bool,
 
+    /// Enable response-based matching (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub match_response: bool,
+
     /// Make ip_cidr rules in rule-sets accept empty query response
     #[serde(default, skip_serializing_if = "is_false")]
     pub rule_set_ip_cidr_accept_empty: bool,
+
+    /// Match DNS response code (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_rcode: Option<RCode>,
+
+    /// Match DNS answer records (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_answer: Vec<String>,
+
+    /// Match DNS authority records (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_ns: Vec<String>,
+
+    /// Match DNS additional records (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_extra: Vec<String>,
 
     /// Invert match result
     #[serde(default, skip_serializing_if = "is_false")]
@@ -802,6 +916,12 @@ pub enum TaggedDnsRuleAction {
     /// Route to a DNS server
     Route(RouteAction),
 
+    /// Evaluate a DNS response and continue matching (since 1.14.0)
+    Evaluate(EvaluateAction),
+
+    /// Return a previously evaluated response (since 1.14.0)
+    Respond,
+
     /// Set route options
     #[serde(rename = "route-options")]
     RouteOptions(RouteOptionsAction),
@@ -839,11 +959,38 @@ pub struct RouteAction {
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_cache: bool,
 
+    /// Disable optimistic DNS caching for this query (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_optimistic_cache: bool,
+
     /// Rewrite TTL in DNS responses
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewrite_ttl: Option<u32>,
 
     /// Client subnet for this query
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_subnet: Option<String>,
+}
+
+/// Evaluate action for DNS rules (since 1.14.0).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct EvaluateAction {
+    /// Target DNS server tag.
+    pub server: String,
+
+    /// Disable cache for this query.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_cache: bool,
+
+    /// Disable optimistic DNS caching for this query.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_optimistic_cache: bool,
+
+    /// Rewrite TTL in DNS responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewrite_ttl: Option<u32>,
+
+    /// Client subnet for this query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
 }
@@ -854,6 +1001,10 @@ pub struct RouteOptionsAction {
     /// Disable cache for this query
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_cache: bool,
+
+    /// Disable optimistic DNS caching for this query (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_optimistic_cache: bool,
 
     /// Rewrite TTL in DNS responses
     #[serde(default, skip_serializing_if = "Option::is_none")]

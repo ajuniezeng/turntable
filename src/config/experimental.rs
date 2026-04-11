@@ -45,6 +45,10 @@ pub struct CacheFile {
     /// Timeout of rejected DNS response cache (default: "7d", since 1.9.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rdrc_timeout: Option<String>,
+
+    /// Store DNS cache in the cache file (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub store_dns: bool,
 }
 
 /// Clash API configuration
@@ -184,6 +188,17 @@ mod tests {
         let json = serde_json::to_string(&cache).unwrap();
         assert!(json.contains(r#""store_rdrc":true"#));
         assert!(json.contains(r#""rdrc_timeout":"7d""#));
+    }
+
+    #[test]
+    fn test_cache_file_with_store_dns() {
+        let cache = CacheFile {
+            enabled: true,
+            store_dns: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cache).unwrap();
+        assert!(json.contains(r#""store_dns":true"#));
     }
 
     #[test]

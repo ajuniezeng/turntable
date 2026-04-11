@@ -98,6 +98,7 @@ impl ProtocolParser for Hysteria2Parser {
             server_port: Some(server_port),
             server_ports: Vec::new(),
             hop_interval: None,
+            hop_interval_max: None,
             up_mbps: params.get("up").and_then(|s| s.parse().ok()),
             down_mbps: params.get("down").and_then(|s| s.parse().ok()),
             obfs,
@@ -108,6 +109,7 @@ impl ProtocolParser for Hysteria2Parser {
             },
             network: None,
             tls,
+            bbr_profile: None,
             brutal_debug: false,
             dial: DialFields::default(),
         }))

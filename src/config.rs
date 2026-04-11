@@ -10,6 +10,7 @@ use crate::config::ntp::Ntp;
 use crate::config::outbound::Outbound;
 use crate::config::route::Route;
 use crate::config::service::Service;
+use crate::config::shared::CertificateProvider;
 
 pub mod certificate;
 pub mod dns;
@@ -48,6 +49,10 @@ pub struct SingBoxConfig {
     /// Certificate configuration (since 1.12.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub certificate: Option<Certificate>,
+
+    /// Certificate provider configurations (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub certificate_providers: Vec<CertificateProvider>,
 
     /// Endpoint configurations (since 1.11.0)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -138,6 +143,18 @@ impl SingBoxConfigBuilder {
     /// Set certificate configuration
     pub fn certificate(mut self, certificate: Certificate) -> Self {
         self.config.certificate = Some(certificate);
+        self
+    }
+
+    /// Add a certificate provider.
+    pub fn certificate_provider(mut self, provider: CertificateProvider) -> Self {
+        self.config.certificate_providers.push(provider);
+        self
+    }
+
+    /// Set certificate providers.
+    pub fn certificate_providers(mut self, providers: Vec<CertificateProvider>) -> Self {
+        self.config.certificate_providers = providers;
         self
     }
 

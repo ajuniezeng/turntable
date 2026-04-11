@@ -574,7 +574,7 @@ url = "https://example.com/sub1"
         // Check defaults
         assert_eq!(config.output, "./out/config.json");
         assert!(!config.ipv4_only);
-        assert_eq!(config.target_version, "1.13");
+        assert_eq!(config.target_version, "1.14");
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
         assert!(!config.detour_selector);
@@ -724,14 +724,14 @@ url = "https://example.com/sub1"
 
         let toml_with_patch = r#"
 template = "./template.json"
-target_version = "1.13.5"
+        target_version = "1.14.5"
 
 [[subscriptions]]
 name = "Provider1"
 url = "https://example.com/sub1"
 "#;
         let config = GeneratorConfig::from_toml(toml_with_patch).unwrap();
-        assert_eq!(config.target_version, "1.13.5");
+        assert_eq!(config.target_version, "1.14.5");
         let version = config.get_target_version();
         assert_eq!(version.patch, Some(5));
     }
@@ -805,7 +805,7 @@ url = "https://example.com/sub1"
     #[test]
     fn test_default_target_version() {
         let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
-        assert_eq!(config.target_version, "1.13");
+        assert_eq!(config.target_version, "1.14");
         let version = config.get_target_version();
         assert_eq!(version, SingBoxVersion::latest());
     }

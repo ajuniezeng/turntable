@@ -26,7 +26,7 @@ A Rust command-line tool for generating [sing-box](https://sing-box.sagernet.org
   - Subscription caching with configurable TTL
   - Diff view between cached and new subscriptions
 
-- **Version Compatibility**: Target specific sing-box versions (1.10 - 1.13) with automatic feature validation
+- **Version Compatibility**: Target specific sing-box versions (1.10 - 1.14) with automatic feature validation
 
 - **Cloud Upload**: Automatically upload generated configs to WebDAV-compatible storage
 
@@ -83,13 +83,13 @@ Create a `generator.toml` file to configure the generation process:
 
 ```toml
 # Template file (local path or URL)
-template = "./templates/1.13.json"
+template = "./templates/1.14.json"
 
 # Output file path
 output = "./out/config.json"
 
-# Target sing-box version (1.10, 1.11, 1.12, or 1.13)
-target_version = "1.13"
+# Target sing-box version (1.10, 1.11, 1.12, 1.13, or 1.14)
+target_version = "1.14"
 
 # IPv4-only mode: remove IPv6 outbounds and set DNS strategy to ipv4_only
 ipv4_only = false

@@ -45,6 +45,10 @@ pub struct DomainResolverConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_cache: bool,
 
+    /// Disable optimistic DNS caching for this query (since 1.14.0)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_optimistic_cache: bool,
+
     /// Rewrite TTL in DNS responses
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewrite_ttl: Option<u32>,
@@ -270,6 +274,79 @@ pub struct ListenFields {
 }
 
 // ============================================================================
+// Certificate Providers
+// ============================================================================
+
+/// Reference to a certificate provider.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum CertificateProviderRef {
+    /// Reference a shared certificate provider by tag.
+    Tag(String),
+    /// Inline certificate provider definition.
+    Inline(Box<CertificateProvider>),
+}
+
+/// Shared certificate provider definition (since 1.14.0).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum CertificateProvider {
+    /// ACME certificate provider.
+    Acme(Box<AcmeConfig>),
+    /// Tailscale-backed certificate provider.
+    Tailscale(TailscaleCertificateProvider),
+    /// Cloudflare Origin CA certificate provider.
+    CloudflareOriginCa(CloudflareOriginCaCertificateProvider),
+}
+
+/// Tailscale certificate provider (since 1.14.0).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TailscaleCertificateProvider {
+    /// Provider tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+
+    /// Tailscale endpoint tag.
+    pub endpoint: String,
+}
+
+/// Cloudflare Origin CA certificate provider (since 1.14.0).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CloudflareOriginCaCertificateProvider {
+    /// Provider tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+
+    /// Domains to include in the certificate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain: Vec<String>,
+
+    /// Directory to store certificate data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_directory: Option<String>,
+
+    /// Cloudflare API token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+
+    /// Cloudflare Origin CA key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_ca_key: Option<String>,
+
+    /// Requested certificate type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_type: Option<String>,
+
+    /// Requested validity in days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_validity: Option<u32>,
+
+    /// Upstream outbound tag for provider HTTP requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
+}
+
+// ============================================================================
 // TLS Fields
 // ============================================================================
 
@@ -348,6 +425,10 @@ pub struct InboundTlsConfig {
     /// ACME configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acme: Option<AcmeConfig>,
+
+    /// Certificate provider reference (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_provider: Option<CertificateProviderRef>,
 
     /// ECH (Encrypted Client Hello) configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -453,6 +534,10 @@ pub struct OutboundTlsConfig {
 /// ACME configuration for automatic certificate management.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AcmeConfig {
+    /// Provider tag when used as a certificate provider.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+
     /// List of domains for certificate
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub domain: Vec<String>,
@@ -472,6 +557,10 @@ pub struct AcmeConfig {
     /// ACME CA provider: "letsencrypt", "zerossl", or custom URL
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+
+    /// PEM-encoded private key of an existing ACME account (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
 
     /// Disable HTTP challenges
     #[serde(default, skip_serializing_if = "is_false")]
@@ -496,6 +585,14 @@ pub struct AcmeConfig {
     /// DNS01 challenge configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns01_challenge: Option<Dns01Challenge>,
+
+    /// Private key type to generate for new certificates (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_type: Option<String>,
+
+    /// Upstream outbound tag for provider HTTP requests (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
 }
 
 /// External Account Binding for ACME.
@@ -636,8 +733,36 @@ pub struct OutboundRealityConfig {
 
 /// DNS01 challenge configuration for ACME.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Dns01Challenge {
+    /// TTL for the temporary TXT record (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
+
+    /// Delay before propagation checks start (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propagation_delay: Option<String>,
+
+    /// Maximum time to wait for propagation (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propagation_timeout: Option<String>,
+
+    /// DNS resolvers used for propagation checks (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolvers: Vec<String>,
+
+    /// Override domain used for the DNS challenge record (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_domain: Option<String>,
+
+    /// Provider-specific configuration.
+    #[serde(flatten)]
+    pub provider: Dns01ChallengeProvider,
+}
+
+/// Provider-specific DNS01 challenge configuration.
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "provider", rename_all = "lowercase")]
-pub enum Dns01Challenge {
+pub enum Dns01ChallengeProvider {
     /// Alibaba Cloud DNS
     #[serde(rename = "alidns")]
     AliDns(AliDnsChallenge),
@@ -898,11 +1023,19 @@ mod tests {
 
     #[test]
     fn test_dns01_challenge_cloudflare() {
-        let challenge = Dns01Challenge::Cloudflare(CloudflareChallenge {
-            api_token: Some("token123".to_string()),
-            zone_token: Some("zone456".to_string()),
-        });
+        let challenge = Dns01Challenge {
+            ttl: Some("5m".to_string()),
+            propagation_delay: None,
+            propagation_timeout: None,
+            resolvers: vec![],
+            override_domain: None,
+            provider: Dns01ChallengeProvider::Cloudflare(CloudflareChallenge {
+                api_token: Some("token123".to_string()),
+                zone_token: Some("zone456".to_string()),
+            }),
+        };
         let json = serde_json::to_string(&challenge).unwrap();
+        assert!(json.contains(r#""ttl":"5m""#));
         assert!(json.contains(r#""provider":"cloudflare""#));
         assert!(json.contains(r#""api_token":"token123""#));
         assert!(json.contains(r#""zone_token":"zone456""#));
@@ -910,15 +1043,29 @@ mod tests {
 
     #[test]
     fn test_dns01_challenge_alidns() {
-        let challenge = Dns01Challenge::AliDns(AliDnsChallenge {
-            access_key_id: Some("id".to_string()),
-            access_key_secret: Some("secret".to_string()),
-            region_id: Some("cn-hangzhou".to_string()),
-            security_token: None,
-        });
+        let challenge = Dns01Challenge {
+            ttl: None,
+            propagation_delay: None,
+            propagation_timeout: None,
+            resolvers: vec![],
+            override_domain: None,
+            provider: Dns01ChallengeProvider::AliDns(AliDnsChallenge {
+                access_key_id: Some("id".to_string()),
+                access_key_secret: Some("secret".to_string()),
+                region_id: Some("cn-hangzhou".to_string()),
+                security_token: None,
+            }),
+        };
         let json = serde_json::to_string(&challenge).unwrap();
         assert!(json.contains(r#""provider":"alidns""#));
         assert!(json.contains(r#""access_key_id":"id""#));
+    }
+
+    #[test]
+    fn test_certificate_provider_ref_tag() {
+        let provider = CertificateProviderRef::Tag("shared-cert".to_string());
+        let json = serde_json::to_string(&provider).unwrap();
+        assert_eq!(json, r#""shared-cert""#);
     }
 
     #[test]

@@ -2,7 +2,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::config::serde_helpers::{is_false, is_zero_u32, string_or_vec};
-use crate::config::shared::{InboundTlsConfig, ListenFields};
+use crate::config::shared::{DialFields, InboundTlsConfig, ListenFields};
+
+fn is_default_dial_fields(dial: &DialFields) -> bool {
+    dial.detour.is_none()
+        && dial.bind_interface.is_none()
+        && dial.inet4_bind_address.is_none()
+        && dial.inet6_bind_address.is_none()
+        && !dial.bind_address_no_port
+        && dial.routing_mark.is_none()
+        && !dial.reuse_addr
+        && dial.netns.is_none()
+        && dial.connect_timeout.is_none()
+        && !dial.tcp_fast_open
+        && !dial.tcp_multi_path
+        && !dial.disable_tcp_keep_alive
+        && dial.tcp_keep_alive.is_none()
+        && dial.tcp_keep_alive_interval.is_none()
+        && !dial.udp_fragment
+        && dial.domain_resolver.is_none()
+        && dial.network_strategy.is_none()
+        && dial.network_type.is_empty()
+        && dial.fallback_network_type.is_empty()
+        && dial.fallback_delay.is_none()
+        && dial.domain_strategy.is_none()
+}
 
 // ============================================================================
 // Inbound Enum
@@ -49,6 +73,8 @@ pub enum Inbound {
     /// AnyTLS inbound
     #[serde(rename = "anytls")]
     AnyTls(AnyTlsInbound),
+    /// Cloudflare Tunnel inbound (since 1.14.0)
+    Cloudflared(CloudflaredInbound),
     /// TUN inbound
     Tun(TunInbound),
     /// Redirect inbound (Linux only)
@@ -723,6 +749,10 @@ pub struct Hysteria2Inbound {
     /// Enable Brutal debug logging
     #[serde(default, skip_serializing_if = "is_false")]
     pub brutal_debug: bool,
+
+    /// BBR congestion control profile (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbr_profile: Option<String>,
 }
 
 /// Hysteria2 obfuscation configuration
@@ -783,6 +813,53 @@ pub struct AnyTlsInbound {
     /// TLS configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<InboundTlsConfig>,
+}
+
+/// Cloudflare Tunnel inbound configuration (since 1.14.0).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CloudflaredInbound {
+    /// Tag of the inbound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+
+    /// Base64 tunnel token.
+    pub token: String,
+
+    /// Number of high availability connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ha_connections: Option<u32>,
+
+    /// Edge transport protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+
+    /// Enable post-quantum key exchange.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub post_quantum: bool,
+
+    /// IP version used for edge connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_ip_version: Option<u8>,
+
+    /// QUIC datagram version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datagram_version: Option<String>,
+
+    /// Graceful shutdown period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_period: Option<String>,
+
+    /// Edge region selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
+    /// Dial fields for the control plane.
+    #[serde(default, skip_serializing_if = "is_default_dial_fields")]
+    pub control_dialer: DialFields,
+
+    /// Dial fields for the data plane.
+    #[serde(default, skip_serializing_if = "is_default_dial_fields")]
+    pub tunnel_dialer: DialFields,
 }
 
 /// TUN inbound configuration
@@ -912,9 +989,17 @@ pub struct TunInbound {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include_package: Vec<String>,
 
+    /// Include MAC addresses in route (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_mac_address: Vec<String>,
+
     /// Exclude Android packages (Android only)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_package: Vec<String>,
+
+    /// Exclude MAC addresses in route (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_mac_address: Vec<String>,
 
     /// Platform-specific settings
     #[serde(default, skip_serializing_if = "Option::is_none")]

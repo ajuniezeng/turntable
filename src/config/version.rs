@@ -17,7 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub const MIN_SUPPORTED_VERSION: (u32, u32) = (1, 10);
 
 /// Latest supported sing-box version
-pub const LATEST_VERSION: (u32, u32) = (1, 13);
+pub const LATEST_VERSION: (u32, u32) = (1, 14);
 
 // ============================================================================
 // SingBoxVersion Type
@@ -412,9 +412,9 @@ mod tests {
 
     #[test]
     fn test_version_parse_major_minor() {
-        let v = SingBoxVersion::from_str("1.13").unwrap();
+        let v = SingBoxVersion::from_str("1.14").unwrap();
         assert_eq!(v.major, 1);
-        assert_eq!(v.minor, 13);
+        assert_eq!(v.minor, 14);
         assert_eq!(v.patch, None);
     }
 
@@ -477,8 +477,8 @@ mod tests {
 
     #[test]
     fn test_version_display() {
-        let v = SingBoxVersion::new(1, 13);
-        assert_eq!(v.to_string(), "1.13");
+        let v = SingBoxVersion::new(1, 14);
+        assert_eq!(v.to_string(), "1.14");
 
         let v = SingBoxVersion::with_patch(1, 12, 5);
         assert_eq!(v.to_string(), "1.12.5");
@@ -504,10 +504,11 @@ mod tests {
         assert!(SingBoxVersion::new(1, 11).is_supported());
         assert!(SingBoxVersion::new(1, 12).is_supported());
         assert!(SingBoxVersion::new(1, 13).is_supported());
+        assert!(SingBoxVersion::new(1, 14).is_supported());
 
         // Below minimum (but we can't construct these via from_str)
         assert!(!SingBoxVersion::new(1, 9).is_supported());
-        assert!(!SingBoxVersion::new(1, 14).is_supported());
+        assert!(!SingBoxVersion::new(1, 15).is_supported());
     }
 
     #[test]
@@ -540,6 +541,7 @@ mod tests {
         assert!(SingBoxVersion::new(1, 11).supports_endpoints());
         assert!(SingBoxVersion::new(1, 12).supports_endpoints());
         assert!(SingBoxVersion::new(1, 13).supports_endpoints());
+        assert!(SingBoxVersion::new(1, 14).supports_endpoints());
     }
 
     #[test]
@@ -548,6 +550,7 @@ mod tests {
         assert!(!SingBoxVersion::new(1, 11).supports_services());
         assert!(SingBoxVersion::new(1, 12).supports_services());
         assert!(SingBoxVersion::new(1, 13).supports_services());
+        assert!(SingBoxVersion::new(1, 14).supports_services());
     }
 
     #[test]
@@ -556,6 +559,7 @@ mod tests {
         assert!(!SingBoxVersion::new(1, 11).supports_certificate());
         assert!(SingBoxVersion::new(1, 12).supports_certificate());
         assert!(SingBoxVersion::new(1, 13).supports_certificate());
+        assert!(SingBoxVersion::new(1, 14).supports_certificate());
     }
 
     #[test]
@@ -571,6 +575,7 @@ mod tests {
         assert!(!SingBoxVersion::new(1, 11).supports_hysteria_port_hopping());
         assert!(SingBoxVersion::new(1, 12).supports_hysteria_port_hopping());
         assert!(SingBoxVersion::new(1, 13).supports_hysteria_port_hopping());
+        assert!(SingBoxVersion::new(1, 14).supports_hysteria_port_hopping());
     }
 
     #[test]
@@ -586,12 +591,14 @@ mod tests {
         assert!(!SingBoxVersion::new(1, 11).supports_icmp_network());
         assert!(!SingBoxVersion::new(1, 12).supports_icmp_network());
         assert!(SingBoxVersion::new(1, 13).supports_icmp_network());
+        assert!(SingBoxVersion::new(1, 14).supports_icmp_network());
     }
 
     #[test]
     fn test_supports_chrome_certificate_store() {
         assert!(!SingBoxVersion::new(1, 12).supports_chrome_certificate_store());
         assert!(SingBoxVersion::new(1, 13).supports_chrome_certificate_store());
+        assert!(SingBoxVersion::new(1, 14).supports_chrome_certificate_store());
     }
 
     // ========================================================================
@@ -604,6 +611,7 @@ mod tests {
         assert!(SingBoxVersion::new(1, 11).supports_geoip_geosite());
         assert!(!SingBoxVersion::new(1, 12).supports_geoip_geosite());
         assert!(!SingBoxVersion::new(1, 13).supports_geoip_geosite());
+        assert!(!SingBoxVersion::new(1, 14).supports_geoip_geosite());
     }
 
     #[test]
@@ -612,6 +620,7 @@ mod tests {
         assert!(SingBoxVersion::new(1, 11).supports_legacy_dns());
         assert!(!SingBoxVersion::new(1, 12).supports_legacy_dns());
         assert!(!SingBoxVersion::new(1, 13).supports_legacy_dns());
+        assert!(!SingBoxVersion::new(1, 14).supports_legacy_dns());
     }
 
     #[test]
@@ -619,6 +628,7 @@ mod tests {
         assert!(SingBoxVersion::new(1, 10).supports_legacy_fakeip());
         assert!(SingBoxVersion::new(1, 11).supports_legacy_fakeip());
         assert!(!SingBoxVersion::new(1, 12).supports_legacy_fakeip());
+        assert!(!SingBoxVersion::new(1, 14).supports_legacy_fakeip());
     }
 
     // ========================================================================
@@ -627,9 +637,9 @@ mod tests {
 
     #[test]
     fn test_version_serde_roundtrip() {
-        let v = SingBoxVersion::new(1, 13);
+        let v = SingBoxVersion::new(1, 14);
         let json = serde_json::to_string(&v).unwrap();
-        assert_eq!(json, "\"1.13\"");
+        assert_eq!(json, "\"1.14\"");
 
         let parsed: SingBoxVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, v);
@@ -674,7 +684,7 @@ mod tests {
 
         let err = VersionParseError::AboveMaximum {
             version: "1.99".to_string(),
-            maximum: "1.13".to_string(),
+            maximum: "1.14".to_string(),
         };
         assert!(err.to_string().contains("above latest"));
     }

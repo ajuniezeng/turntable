@@ -856,6 +856,10 @@ pub struct Hysteria2Outbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hop_interval: Option<String>,
 
+    /// Maximum port hopping interval for randomization (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_interval_max: Option<String>,
+
     /// Upload bandwidth in Mbps
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up_mbps: Option<u32>,
@@ -879,6 +883,10 @@ pub struct Hysteria2Outbound {
     /// TLS configuration (required)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<OutboundTlsConfig>,
+
+    /// BBR congestion control profile (since 1.14.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbr_profile: Option<String>,
 
     /// Enable Brutal debug logging
     #[serde(default, skip_serializing_if = "is_false")]
