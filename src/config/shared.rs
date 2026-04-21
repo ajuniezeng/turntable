@@ -3,6 +3,8 @@
 //! This module contains reusable field structures that are embedded in multiple
 //! configuration types like outbounds, inbounds, endpoints, etc.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::serde_helpers::is_false;
@@ -308,6 +310,13 @@ pub struct TailscaleCertificateProvider {
 
     /// Tailscale endpoint tag.
     pub endpoint: String,
+
+    /// [`HttpClientRef`] used for the provider's HTTPS requests — either a
+    /// tag referencing
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]
+    /// or an inline definition (since sing-box 1.14.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_client: Option<HttpClientRef>,
 }
 
 /// Cloudflare Origin CA certificate provider (since 1.14.0).
@@ -344,6 +353,175 @@ pub struct CloudflareOriginCaCertificateProvider {
     /// Upstream outbound tag for provider HTTP requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detour: Option<String>,
+
+    /// [`HttpClientRef`] used for the provider's HTTPS requests — either a
+    /// tag referencing
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]
+    /// or an inline definition (since sing-box 1.14.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_client: Option<HttpClientRef>,
+}
+
+// ============================================================================
+// Unified QUIC / HTTP2 fields (since 1.14.0)
+// ============================================================================
+
+/// Shared HTTP/2 and QUIC tuning fields (since sing-box 1.14.0).
+///
+/// In sing-box 1.14.0 the per-protocol tuning knobs for Hysteria, Hysteria2,
+/// TUIC, and HTTP/2+QUIC HTTP clients were unified into a single shared set of
+/// fields. This struct is meant to be merged into its parent via
+/// `#[serde(flatten)]` so the fields appear at the top level of the containing
+/// configuration object:
+///
+/// ```json
+/// {
+///   "type": "tuic",
+///   "idle_timeout": "30s",
+///   "keep_alive_period": "10s",
+///   "disable_path_mtu_discovery": true
+/// }
+/// ```
+///
+/// Durations use Go's duration string format (e.g. `"30s"`, `"1m30s"`). Byte
+/// sizes use suffixes such as `KB`, `MB`, `GB` (e.g. `"8MB"`). Leaving every
+/// field unset (the default) keeps the server-side defaults.
+///
+/// When targeting sing-box < 1.14 these fields emit `UnsupportedFeature`
+/// validation warnings; the legacy Hysteria v1 fields (`recv_window_conn`,
+/// `recv_window`, `disable_mtu_discovery`, …) are the back-compat alternative.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct QuicFields {
+    /// Idle connection timeout. Durations like `"30s"` or `"1m"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<String>,
+
+    /// Period between QUIC keep-alive pings. Durations like `"10s"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive_period: Option<String>,
+
+    /// Per-stream flow-control receive window size, e.g. `"8MB"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_receive_window: Option<String>,
+
+    /// Per-connection flow-control receive window size, e.g. `"64MB"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_receive_window: Option<String>,
+
+    /// Maximum number of concurrent QUIC streams per connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_streams: Option<u64>,
+
+    /// Initial QUIC packet size, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_packet_size: Option<u32>,
+
+    /// Disable QUIC path MTU discovery. Useful on network paths where the
+    /// discovery probes are blocked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_path_mtu_discovery: bool,
+}
+
+impl QuicFields {
+    /// Returns `true` if any field has been set to a non-default value.
+    ///
+    /// Useful for validation: if this is `false`, emitting the whole set can
+    /// be skipped, and the parent config behaves exactly as on sing-box
+    /// releases prior to 1.14.
+    pub fn is_set(&self) -> bool {
+        self.idle_timeout.is_some()
+            || self.keep_alive_period.is_some()
+            || self.stream_receive_window.is_some()
+            || self.connection_receive_window.is_some()
+            || self.max_concurrent_streams.is_some()
+            || self.initial_packet_size.is_some()
+            || self.disable_path_mtu_discovery
+    }
+}
+
+// ============================================================================
+// HTTP client (since 1.14.0)
+// ============================================================================
+
+/// Shared HTTP client definition (since sing-box 1.14.0).
+///
+/// Defines a reusable HTTP client that components making outbound HTTP
+/// requests — remote rule-sets, certificate providers, and anything else that
+/// accepts an [`HttpClientRef`] — can reference by tag or inline.
+///
+/// Two usage patterns are supported:
+///
+/// * **Top-level, shared.** Place the client in
+///   [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]
+///   with a non-empty [`tag`][HttpClient::tag] and reference it from consumers
+///   via [`HttpClientRef::Tag`].
+/// * **Inline.** Embed the client directly into a consumer field; the
+///   [`tag`][HttpClient::tag] is left empty and the definition is wrapped in
+///   [`HttpClientRef::Inline`].
+///
+/// Beyond HTTP-level settings (engine, version, headers, TLS) the struct also
+/// flattens [`QuicFields`] (used by HTTP/2 and HTTP/3) and [`DialFields`]
+/// (shared dialer knobs like `bind_interface`, `detour`, …) into the JSON
+/// representation.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct HttpClient {
+    /// Client tag. Required for clients declared in
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]
+    /// (it's how [`HttpClientRef::Tag`] looks them up); left empty for inline
+    /// definitions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+
+    /// HTTP engine. `"go"` (default, cross-platform Go networking stack) or
+    /// `"apple"` (URLSession; Apple platforms only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+
+    /// HTTP version to negotiate: `1`, `2`, or `3`. Defaults to `2` when the
+    /// server advertises HTTP/2 via ALPN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u8>,
+
+    /// Disable automatic fallback to a lower HTTP version when the requested
+    /// [`version`][HttpClient::version] is unavailable.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disable_version_fallback: bool,
+
+    /// Custom HTTP request headers. A `Host` entry overrides the request host.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+
+    /// TLS configuration applied to HTTPS requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OutboundTlsConfig>,
+
+    /// HTTP/2 or QUIC tuning fields. Ignored when
+    /// [`version`][HttpClient::version] is `1`.
+    #[serde(flatten)]
+    pub quic: QuicFields,
+
+    /// Shared dialer fields (bind interface, detour, routing mark, …).
+    #[serde(flatten)]
+    pub dial: DialFields,
+}
+
+/// Reference to an HTTP client — either a tag or an inline definition (since
+/// sing-box 1.14.0).
+///
+/// Serialized via `#[serde(untagged)]`: a bare JSON string becomes
+/// [`HttpClientRef::Tag`], while a JSON object becomes
+/// [`HttpClientRef::Inline`]. This matches how the sing-box schema accepts
+/// either shape wherever an HTTP client is expected (rule-set `http_client`,
+/// certificate provider `http_client`, …).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum HttpClientRef {
+    /// Reference a shared HTTP client by its tag (must match a
+    /// [`HttpClient::tag`] registered in
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]).
+    Tag(String),
+    /// Inline HTTP client definition, used when no shared tag is appropriate.
+    Inline(Box<HttpClient>),
 }
 
 // ============================================================================
@@ -529,6 +707,34 @@ pub struct OutboundTlsConfig {
     /// Reality configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reality: Option<OutboundRealityConfig>,
+
+    /// TLS engine selector (since sing-box 1.14.0).
+    ///
+    /// * `"go"` (default): the cross-platform Go TLS stack.
+    /// * `"apple"`: Apple's platform TLS stack (Apple platforms only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+
+    /// Forged SNI prepended before the real ClientHello to bypass SNI-based
+    /// filtering (since sing-box 1.14.0).
+    ///
+    /// sing-box sends a decoy ClientHello with this SNI first, then the
+    /// genuine one; middleboxes matching on SNI lock onto the decoy and let
+    /// the real handshake through. [`spoof_method`][OutboundTlsConfig::spoof_method]
+    /// controls how the decoy is invalidated so the real server ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spoof: Option<String>,
+
+    /// How the forged spoof segment is rejected by the real server (since
+    /// sing-box 1.14.0). One of:
+    ///
+    /// * `"wrong-sequence"` (default): decoy uses a TCP sequence number the
+    ///   server will drop.
+    /// * `"wrong-checksum"`: decoy uses an invalid TCP checksum.
+    ///
+    /// Ignored unless [`spoof`][OutboundTlsConfig::spoof] is also set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spoof_method: Option<String>,
 }
 
 /// ACME configuration for automatic certificate management.
@@ -593,6 +799,13 @@ pub struct AcmeConfig {
     /// Upstream outbound tag for provider HTTP requests (since 1.14.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detour: Option<String>,
+
+    /// [`HttpClientRef`] used for the provider's HTTPS requests — either a
+    /// tag referencing
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients]
+    /// or an inline definition (since sing-box 1.14.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_client: Option<HttpClientRef>,
 }
 
 /// External Account Binding for ACME.

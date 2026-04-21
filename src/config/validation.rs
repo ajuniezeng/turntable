@@ -815,6 +815,40 @@ impl SingBoxConfig {
             });
         }
 
+        // Check http_clients (since 1.14)
+        if !self.http_clients.is_empty() && version < &SingBoxVersion::new(1, 14) {
+            result.add_warning(ConfigWarning::UnsupportedFeature {
+                feature: "http_clients".to_string(),
+                min_version: "1.14".to_string(),
+                target_version: version_str.clone(),
+            });
+        }
+
+        // Check certificate provider http_client fields (since 1.14)
+        if version < &SingBoxVersion::new(1, 14) {
+            for provider in &self.certificate_providers {
+                let has_http_client = match provider {
+                    crate::config::shared::CertificateProvider::Acme(p) => {
+                        p.http_client.is_some()
+                    }
+                    crate::config::shared::CertificateProvider::Tailscale(p) => {
+                        p.http_client.is_some()
+                    }
+                    crate::config::shared::CertificateProvider::CloudflareOriginCa(p) => {
+                        p.http_client.is_some()
+                    }
+                };
+                if has_http_client {
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: "certificate_provider.http_client".to_string(),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.clone(),
+                    });
+                    break;
+                }
+            }
+        }
+
         // Check route-level features
         if let Some(route) = &self.route {
             // Check network_strategy (since 1.11)
@@ -835,6 +869,39 @@ impl SingBoxConfig {
                     min_version: "1.12".to_string(),
                     target_version: version_str.clone(),
                 });
+            }
+
+            // Check route.default_http_client (since 1.14)
+            if route.default_http_client.is_some() && version < &SingBoxVersion::new(1, 14) {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: "route.default_http_client".to_string(),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.clone(),
+                });
+            }
+
+            // Check rule-set http_client (since 1.14) and download_detour (deprecated in 1.14)
+            for rs in &route.rule_set {
+                if let crate::config::route::RuleSet::Remote(remote) = rs {
+                    if remote.http_client.is_some() && version < &SingBoxVersion::new(1, 14) {
+                        result.add_warning(ConfigWarning::UnsupportedFeature {
+                            feature: format!("rule_set '{}' http_client", remote.tag),
+                            min_version: "1.14".to_string(),
+                            target_version: version_str.clone(),
+                        });
+                    }
+                    if remote.download_detour.is_some() && version >= &SingBoxVersion::new(1, 14) {
+                        result.add_warning(ConfigWarning::DeprecatedFeature {
+                            feature: format!("rule_set '{}' download_detour", remote.tag),
+                            deprecated_in: "1.14".to_string(),
+                            target_version: version_str.clone(),
+                            suggestion: Some(
+                                "use rule_set.http_client or route.default_http_client instead"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                }
             }
 
             // Check for deprecated geoip/geosite usage
@@ -946,6 +1013,30 @@ impl SingBoxConfig {
                         target_version: version_str.to_string(),
                     });
                 }
+
+                let tag = h.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                if h.quic.is_set() && version < &SingBoxVersion::new(1, 14) {
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!("hysteria outbound '{}' QUIC tuning fields", tag),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                }
+                if version >= &SingBoxVersion::new(1, 14)
+                    && (h.recv_window_conn.is_some()
+                        || h.recv_window.is_some()
+                        || h.disable_mtu_discovery)
+                {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: format!("hysteria outbound '{}' legacy QUIC tuning", tag),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "use stream_receive_window, connection_receive_window, disable_path_mtu_discovery"
+                                .to_string(),
+                        ),
+                    });
+                }
             }
             Outbound::Hysteria2(h2) => {
                 // server_ports requires 1.11
@@ -968,8 +1059,46 @@ impl SingBoxConfig {
                         target_version: version_str.to_string(),
                     });
                 }
+
+                if h2.quic.is_set() && version < &SingBoxVersion::new(1, 14) {
+                    let tag = h2.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!("hysteria2 outbound '{}' QUIC tuning fields", tag),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                }
+            }
+            Outbound::Tuic(t) => {
+                if t.quic.is_set() && version < &SingBoxVersion::new(1, 14) {
+                    let tag = t.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!("tuic outbound '{}' QUIC tuning fields", tag),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                }
             }
             _ => {}
+        }
+
+        // Check TLS 1.14 fields (engine, spoof, spoof_method) on outbounds that carry TLS.
+        let tls = match outbound {
+            Outbound::Http(o) => o.tls.as_ref(),
+            Outbound::Trojan(o) => o.tls.as_ref(),
+            Outbound::VMess(o) => o.tls.as_ref(),
+            Outbound::VLess(o) => o.tls.as_ref(),
+            Outbound::Hysteria(o) => o.tls.as_ref(),
+            Outbound::Hysteria2(o) => o.tls.as_ref(),
+            Outbound::Tuic(o) => o.tls.as_ref(),
+            Outbound::AnyTls(o) => o.tls.as_ref(),
+            Outbound::Naive(o) => o.tls.as_ref(),
+            _ => None,
+        };
+        if let Some(tls) = tls {
+            let tag = get_outbound_tag(outbound).unwrap_or_else(|| "<unnamed>".to_string());
+            let context = format!("outbound '{}'", tag);
+            self.check_outbound_tls_114(tls, version, version_str, &context, result);
         }
 
         // Check dial fields network_strategy (since 1.11)
@@ -1053,6 +1182,33 @@ impl SingBoxConfig {
                     target_version: version_str.to_string(),
                 });
             }
+            Inbound::Hysteria(h) => {
+                let tag = h.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                if h.quic.is_set() && version < &SingBoxVersion::new(1, 14) {
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!("hysteria inbound '{}' QUIC tuning fields", tag),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                }
+                if version >= &SingBoxVersion::new(1, 14)
+                    && (h.recv_window_conn.is_some()
+                        || h.recv_window.is_some()
+                        || h.recv_window_client.is_some()
+                        || h.max_conn_client.is_some()
+                        || h.disable_mtu_discovery)
+                {
+                    result.add_warning(ConfigWarning::DeprecatedFeature {
+                        feature: format!("hysteria inbound '{}' legacy QUIC tuning", tag),
+                        deprecated_in: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                        suggestion: Some(
+                            "use stream_receive_window, connection_receive_window, disable_path_mtu_discovery"
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
             Inbound::Hysteria2(inbound)
                 if inbound.bbr_profile.is_some() && version < &SingBoxVersion::new(1, 14) =>
             {
@@ -1062,6 +1218,32 @@ impl SingBoxConfig {
                     .unwrap_or_else(|| "<unnamed>".to_string());
                 result.add_warning(ConfigWarning::UnsupportedFeature {
                     feature: format!("hysteria2 inbound '{}' bbr_profile", tag),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            Inbound::Hysteria2(inbound)
+                if inbound.quic.is_set() && version < &SingBoxVersion::new(1, 14) =>
+            {
+                let tag = inbound
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("hysteria2 inbound '{}' QUIC tuning fields", tag),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            Inbound::Tuic(inbound)
+                if inbound.quic.is_set() && version < &SingBoxVersion::new(1, 14) =>
+            {
+                let tag = inbound
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("tuic inbound '{}' QUIC tuning fields", tag),
                     min_version: "1.14".to_string(),
                     target_version: version_str.to_string(),
                 });
@@ -1117,6 +1299,40 @@ impl SingBoxConfig {
         }
     }
 
+    /// Check TLS version compatibility for outbound TLS (1.14 engine/spoof fields).
+    fn check_outbound_tls_114(
+        &self,
+        tls: &crate::config::shared::OutboundTlsConfig,
+        version: &SingBoxVersion,
+        version_str: &str,
+        context: &str,
+        result: &mut ValidationResult,
+    ) {
+        if version < &SingBoxVersion::new(1, 14) {
+            if tls.engine.is_some() {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("{}: tls.engine", context),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            if tls.spoof.is_some() {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("{}: tls.spoof", context),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+            if tls.spoof_method.is_some() {
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("{}: tls.spoof_method", context),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
+            }
+        }
+    }
+
     /// Check DNS version compatibility.
     fn check_dns_version_compatibility(
         &self,
@@ -1158,6 +1374,25 @@ impl SingBoxConfig {
                 min_version: "1.14".to_string(),
                 target_version: version_str.to_string(),
             });
+        }
+
+        // Tailscale DNS server accept_search_domain (since 1.14.0-alpha.15)
+        if version < &SingBoxVersion::new(1, 14) {
+            for server in &dns.servers {
+                if let DnsServer::Tailscale(ts) = server
+                    && ts.accept_search_domain
+                {
+                    result.add_warning(ConfigWarning::UnsupportedFeature {
+                        feature: format!(
+                            "tailscale DNS server '{}' accept_search_domain",
+                            ts.tag
+                        ),
+                        min_version: "1.14".to_string(),
+                        target_version: version_str.to_string(),
+                    });
+                    break;
+                }
+            }
         }
 
         if is_v14_or_newer && dns.independent_cache {

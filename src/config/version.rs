@@ -203,6 +203,134 @@ impl SingBoxVersion {
         self.at_least(1, 13)
     }
 
+    // --- Version 1.14 Features ---
+
+    /// Shared `certificate_providers` section (since sing-box 1.14.0).
+    ///
+    /// Enables centralized ACME, Tailscale, and Cloudflare Origin CA
+    /// certificate providers referenced from TLS configuration by tag.
+    pub fn supports_certificate_providers(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Shared `http_clients` section and inline/tag [`HttpClientRef`] usage
+    /// (since sing-box 1.14.0).
+    ///
+    /// [`HttpClientRef`]: crate::config::shared::HttpClientRef
+    pub fn supports_http_clients(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// DNS `optimistic` cache configuration (since sing-box 1.14.0).
+    ///
+    /// Serves stale answers while revalidating, trading strict freshness for
+    /// lower tail latency.
+    pub fn supports_dns_optimistic(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// DNS `evaluate` / `respond` rule actions and matching on response
+    /// records (since sing-box 1.14.0).
+    pub fn supports_dns_evaluate_respond(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Tailscale DNS `accept_search_domain` field (since sing-box 1.14.0).
+    ///
+    /// Enables routing MagicDNS search-domain suffixes through the Tailscale
+    /// resolver in addition to exact MagicDNS names.
+    pub fn supports_tailscale_accept_search_domain(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// TLS `spoof` / `spoof_method` fields for outbound TLS
+    /// (since sing-box 1.14.0).
+    ///
+    /// Selects a ClientHello fingerprint family (uTLS) independent of the
+    /// underlying TLS engine.
+    pub fn supports_tls_spoof(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// TLS `engine` selector for outbound TLS (since sing-box 1.14.0).
+    ///
+    /// Selects between the platform engine (Apple / system) and the Go
+    /// engine at runtime.
+    pub fn supports_tls_engine(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Hysteria2 `hop_interval_max` and `bbr_profile` fields
+    /// (since sing-box 1.14.0).
+    ///
+    /// `hop_interval_max` randomizes port-hopping cadence; `bbr_profile`
+    /// selects among tuned BBR congestion profiles.
+    pub fn supports_hysteria2_bbr_and_hop_max(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Unified QUIC / HTTP-2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Covers `idle_timeout`, `keep_alive_period`, `stream_receive_window`,
+    /// `connection_receive_window`, `max_concurrent_streams`,
+    /// `initial_packet_size`, and `disable_path_mtu_discovery` across
+    /// Hysteria, Hysteria2, TUIC, and HTTP-client configurations. See
+    /// [`QuicFields`].
+    ///
+    /// [`QuicFields`]: crate::config::shared::QuicFields
+    pub fn supports_quic_shared_fields(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// `route.default_http_client` field (since sing-box 1.14.0).
+    ///
+    /// Supplies a fallback [`HttpClientRef`] tag for remote rule-sets and
+    /// certificate providers that do not specify one explicitly.
+    ///
+    /// [`HttpClientRef`]: crate::config::shared::HttpClientRef
+    pub fn supports_route_default_http_client(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Remote rule-set `http_client` field (since sing-box 1.14.0).
+    ///
+    /// Replaces the legacy `download_detour` field — see
+    /// [`supports_rule_set_download_detour`][Self::supports_rule_set_download_detour].
+    pub fn supports_rule_set_http_client(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// Cloudflared (Cloudflare Tunnel) inbound (since sing-box 1.14.0).
+    pub fn supports_cloudflared_inbound(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// TUN `include_mac_address` / `exclude_mac_address` filters
+    /// (since sing-box 1.14.0).
+    ///
+    /// Allows MAC-address-based inclusion/exclusion in the TUN route table.
+    pub fn supports_tun_mac_filters(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// `experimental.cache_file.store_dns` (since sing-box 1.14.0).
+    ///
+    /// Persists DNS query results to disk; replaces the deprecated
+    /// `store_rdrc` — see
+    /// [`supports_cache_file_store_rdrc`][Self::supports_cache_file_store_rdrc].
+    pub fn supports_cache_file_store_dns(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
+    /// `route.find_neighbor` and `route.dhcp_lease_files`
+    /// (since sing-box 1.14.0).
+    ///
+    /// Enables LAN neighbor lookup for sniffer-derived metadata and custom
+    /// DHCP lease sources.
+    pub fn supports_route_neighbor_lookup(&self) -> bool {
+        self.at_least(1, 14)
+    }
+
     // ========================================================================
     // Deprecation Detection
     // ========================================================================
@@ -225,6 +353,64 @@ impl SingBoxVersion {
     /// FakeIP in DNS (deprecated in 1.12.0, use fakeip DNS server instead)
     pub fn supports_legacy_fakeip(&self) -> bool {
         self.below(1, 12)
+    }
+
+    /// Inline TLS `acme` block is still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// Replaced by the shared `certificate_providers` section; see
+    /// [`supports_certificate_providers`][Self::supports_certificate_providers].
+    pub fn supports_tls_acme(&self) -> bool {
+        self.below(1, 14)
+    }
+
+    /// DNS `independent_cache` is still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// In 1.14.0 caches are always scoped per server, making the field
+    /// redundant.
+    pub fn supports_dns_independent_cache(&self) -> bool {
+        self.below(1, 14)
+    }
+
+    /// `experimental.cache_file.store_rdrc` is still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// Replaced by `store_dns`; see
+    /// [`supports_cache_file_store_dns`][Self::supports_cache_file_store_dns].
+    pub fn supports_cache_file_store_rdrc(&self) -> bool {
+        self.below(1, 14)
+    }
+
+    /// Legacy Hysteria v1 tuning fields are still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// Covers `recv_window_conn`, `recv_window`, `recv_window_client`,
+    /// `max_conn_client`, and `disable_mtu_discovery`. Replaced by the
+    /// unified [`QuicFields`]; see
+    /// [`supports_quic_shared_fields`][Self::supports_quic_shared_fields].
+    ///
+    /// [`QuicFields`]: crate::config::shared::QuicFields
+    pub fn supports_hysteria_legacy_tuning(&self) -> bool {
+        self.below(1, 14)
+    }
+
+    /// Remote rule-set `download_detour` is still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// Replaced by `http_client`; see
+    /// [`supports_rule_set_http_client`][Self::supports_rule_set_http_client].
+    pub fn supports_rule_set_download_detour(&self) -> bool {
+        self.below(1, 14)
+    }
+
+    /// Dial-field `domain_strategy` is still accepted
+    /// (deprecated in sing-box 1.14.0).
+    ///
+    /// Replaced by `domain_resolver`, which points at a named DNS server
+    /// rather than selecting a strategy inline.
+    pub fn supports_dial_domain_strategy(&self) -> bool {
+        self.below(1, 14)
     }
 }
 
@@ -601,6 +787,57 @@ mod tests {
         assert!(SingBoxVersion::new(1, 14).supports_chrome_certificate_store());
     }
 
+    #[test]
+    fn test_supports_114_additions() {
+        let v13 = SingBoxVersion::new(1, 13);
+        let v14 = SingBoxVersion::new(1, 14);
+
+        assert!(!v13.supports_certificate_providers());
+        assert!(v14.supports_certificate_providers());
+
+        assert!(!v13.supports_http_clients());
+        assert!(v14.supports_http_clients());
+
+        assert!(!v13.supports_dns_optimistic());
+        assert!(v14.supports_dns_optimistic());
+
+        assert!(!v13.supports_dns_evaluate_respond());
+        assert!(v14.supports_dns_evaluate_respond());
+
+        assert!(!v13.supports_tailscale_accept_search_domain());
+        assert!(v14.supports_tailscale_accept_search_domain());
+
+        assert!(!v13.supports_tls_spoof());
+        assert!(v14.supports_tls_spoof());
+
+        assert!(!v13.supports_tls_engine());
+        assert!(v14.supports_tls_engine());
+
+        assert!(!v13.supports_hysteria2_bbr_and_hop_max());
+        assert!(v14.supports_hysteria2_bbr_and_hop_max());
+
+        assert!(!v13.supports_quic_shared_fields());
+        assert!(v14.supports_quic_shared_fields());
+
+        assert!(!v13.supports_route_default_http_client());
+        assert!(v14.supports_route_default_http_client());
+
+        assert!(!v13.supports_rule_set_http_client());
+        assert!(v14.supports_rule_set_http_client());
+
+        assert!(!v13.supports_cloudflared_inbound());
+        assert!(v14.supports_cloudflared_inbound());
+
+        assert!(!v13.supports_tun_mac_filters());
+        assert!(v14.supports_tun_mac_filters());
+
+        assert!(!v13.supports_cache_file_store_dns());
+        assert!(v14.supports_cache_file_store_dns());
+
+        assert!(!v13.supports_route_neighbor_lookup());
+        assert!(v14.supports_route_neighbor_lookup());
+    }
+
     // ========================================================================
     // Deprecation Detection Tests
     // ========================================================================
@@ -629,6 +866,30 @@ mod tests {
         assert!(SingBoxVersion::new(1, 11).supports_legacy_fakeip());
         assert!(!SingBoxVersion::new(1, 12).supports_legacy_fakeip());
         assert!(!SingBoxVersion::new(1, 14).supports_legacy_fakeip());
+    }
+
+    #[test]
+    fn test_supports_114_deprecations() {
+        let v13 = SingBoxVersion::new(1, 13);
+        let v14 = SingBoxVersion::new(1, 14);
+
+        assert!(v13.supports_tls_acme());
+        assert!(!v14.supports_tls_acme());
+
+        assert!(v13.supports_dns_independent_cache());
+        assert!(!v14.supports_dns_independent_cache());
+
+        assert!(v13.supports_cache_file_store_rdrc());
+        assert!(!v14.supports_cache_file_store_rdrc());
+
+        assert!(v13.supports_hysteria_legacy_tuning());
+        assert!(!v14.supports_hysteria_legacy_tuning());
+
+        assert!(v13.supports_rule_set_download_detour());
+        assert!(!v14.supports_rule_set_download_detour());
+
+        assert!(v13.supports_dial_domain_strategy());
+        assert!(!v14.supports_dial_domain_strategy());
     }
 
     // ========================================================================

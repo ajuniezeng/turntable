@@ -444,6 +444,17 @@ pub struct TailscaleDnsServer {
     /// Accept default DNS resolvers for fallback queries in addition to MagicDNS
     #[serde(default, skip_serializing_if = "is_false")]
     pub accept_default_resolvers: bool,
+
+    /// Route MagicDNS search-domain suffixes through this resolver
+    /// (since sing-box 1.14.0).
+    ///
+    /// When `true`, queries for names matching the tailnet's MagicDNS
+    /// search-domain list (for example `*.tailnet-name.ts.net`) are resolved
+    /// by Tailscale even when [`accept_default_resolvers`][Self::accept_default_resolvers]
+    /// is also enabled. Defaults to `false` to preserve pre-1.14 behavior,
+    /// where only exact MagicDNS names are captured.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accept_search_domain: bool,
 }
 
 /// Resolved DNS server

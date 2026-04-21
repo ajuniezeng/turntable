@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::config::serde_helpers::{is_false, is_zero_u32, string_or_vec};
-use crate::config::shared::{DialFields, InboundTlsConfig, ListenFields};
+use crate::config::shared::{DialFields, InboundTlsConfig, ListenFields, QuicFields};
 
 fn is_default_dial_fields(dial: &DialFields) -> bool {
     dial.detour.is_none()
@@ -590,17 +590,52 @@ pub struct HysteriaInbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_str: Option<String>,
 
-    /// Receive window connection size
+    /// Per-stream receive-window size, in bytes.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::stream_receive_window`][crate::config::shared::QuicFields::stream_receive_window]
+    /// on [`quic`][HysteriaInbound::quic].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv_window_conn: Option<u64>,
 
-    /// Receive window size
+    /// Per-connection receive-window size, in bytes.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::connection_receive_window`][crate::config::shared::QuicFields::connection_receive_window]
+    /// on [`quic`][HysteriaInbound::quic].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv_window: Option<u64>,
 
-    /// Disable MTU discovery
+    /// Client-side receive-window size, in bytes.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Clients now negotiate their own
+    /// window via the unified QUIC fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recv_window_client: Option<u64>,
+
+    /// Maximum concurrent streams per client.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::max_concurrent_streams`][crate::config::shared::QuicFields::max_concurrent_streams]
+    /// on [`quic`][HysteriaInbound::quic].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_conn_client: Option<u64>,
+
+    /// Disable QUIC path-MTU discovery.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::disable_path_mtu_discovery`][crate::config::shared::QuicFields::disable_path_mtu_discovery]
+    /// on [`quic`][HysteriaInbound::quic].
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_mtu_discovery: bool,
+
+    /// Unified QUIC / HTTP/2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Flattened into the inbound at serialization time, so the seven knobs
+    /// documented on [`QuicFields`] appear as top-level keys on this
+    /// inbound. Supersedes the legacy per-field tuning knobs above.
+    #[serde(flatten)]
+    pub quic: QuicFields,
 
     /// TLS configuration (required)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -702,6 +737,14 @@ pub struct TuicInbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat: Option<String>,
 
+    /// Unified QUIC / HTTP/2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Flattened into the inbound at serialization time, so the seven knobs
+    /// documented on [`QuicFields`] appear as top-level keys on this
+    /// inbound.
+    #[serde(flatten)]
+    pub quic: QuicFields,
+
     /// TLS configuration (required)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<InboundTlsConfig>,
@@ -753,6 +796,14 @@ pub struct Hysteria2Inbound {
     /// BBR congestion control profile (since 1.14.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bbr_profile: Option<String>,
+
+    /// Unified QUIC / HTTP/2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Flattened into the inbound at serialization time, so the seven knobs
+    /// documented on [`QuicFields`] appear as top-level keys on this
+    /// inbound.
+    #[serde(flatten)]
+    pub quic: QuicFields,
 }
 
 /// Hysteria2 obfuscation configuration

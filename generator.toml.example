@@ -10,8 +10,8 @@ output = "./out/config.json"
 # DNS strategy will be set to `ipv4_only`, remove all outbound whose host is IPv6 address
 ipv4_only = false
 
-# Target sing-box version, default to latest supported version, currently "1.13"
-target_version = "1.13"
+# Target sing-box version, default to latest supported version, currently "1.14"
+target_version = "1.14"
 
 # Enable country code outbound selectors. Turntable will generate selectors based on country flags from outbound tags and insert these selectors to existing selectors from template, default to true
 country_code_outbound_selectors = true

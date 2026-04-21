@@ -7,7 +7,10 @@ use turntable::config::dns::{DnsRule, DnsRuleAction, QueryType, RCode, TaggedDns
 use turntable::config::inbound::Inbound;
 use turntable::config::outbound::Outbound;
 use turntable::config::route::{RuleAction, RuleSet};
-use turntable::config::shared::{CertificateProvider, CertificateProviderRef};
+use turntable::config::shared::{
+    CertificateProvider, CertificateProviderRef, HttpClient, HttpClientRef,
+};
+use turntable::config::version::SingBoxVersion;
 use turntable::config::SingBoxConfig;
 
 #[test]
@@ -425,4 +428,358 @@ fn test_parse_cloudflared_inbound() {
             && cloudflared.control_dialer.detour.as_deref() == Some("proxy")
             && cloudflared.tunnel_dialer.bind_interface.as_deref() == Some("eth0")
     ));
+}
+
+#[test]
+fn test_parse_top_level_http_clients() {
+    let json = r#"{
+        "http_clients": [
+            {
+                "tag": "shared-client",
+                "engine": "apple",
+                "version": 2,
+                "disable_version_fallback": true,
+                "headers": {"X-Test": "1"},
+                "idle_timeout": "30s",
+                "keep_alive_period": "10s",
+                "max_concurrent_streams": 128,
+                "initial_packet_size": 1200,
+                "disable_path_mtu_discovery": true,
+                "tls": {"enabled": true, "server_name": "example.com"}
+            }
+        ]
+    }"#;
+
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.http_clients.len(), 1);
+    let client = &config.http_clients[0];
+    assert_eq!(client.tag, "shared-client");
+    assert_eq!(client.engine.as_deref(), Some("apple"));
+    assert_eq!(client.version, Some(2));
+    assert!(client.disable_version_fallback);
+    assert_eq!(client.headers.get("X-Test").map(String::as_str), Some("1"));
+    assert_eq!(client.quic.idle_timeout.as_deref(), Some("30s"));
+    assert_eq!(client.quic.max_concurrent_streams, Some(128));
+    assert!(client.quic.disable_path_mtu_discovery);
+    assert_eq!(
+        client.tls.as_ref().and_then(|t| t.server_name.as_deref()),
+        Some("example.com")
+    );
+}
+
+#[test]
+fn test_parse_rule_set_http_client_inline_and_tag() {
+    let json = r#"{
+        "route": {
+            "rule_set": [
+                {
+                    "type": "remote",
+                    "tag": "rs1",
+                    "url": "https://example.com/rs.srs",
+                    "http_client": "shared-client"
+                },
+                {
+                    "type": "remote",
+                    "tag": "rs2",
+                    "url": "https://example.com/rs2.srs",
+                    "http_client": {
+                        "engine": "go",
+                        "idle_timeout": "1m"
+                    }
+                }
+            ]
+        }
+    }"#;
+
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    let route = config.route.unwrap();
+    assert_eq!(route.rule_set.len(), 2);
+    match &route.rule_set[0] {
+        RuleSet::Remote(r) => match r.http_client.as_ref().unwrap() {
+            HttpClientRef::Tag(t) => assert_eq!(t, "shared-client"),
+            _ => panic!("expected tag reference"),
+        },
+        _ => panic!("expected remote rule set"),
+    }
+    match &route.rule_set[1] {
+        RuleSet::Remote(r) => match r.http_client.as_ref().unwrap() {
+            HttpClientRef::Inline(client) => {
+                assert_eq!(client.engine.as_deref(), Some("go"));
+                assert_eq!(client.quic.idle_timeout.as_deref(), Some("1m"));
+            }
+            _ => panic!("expected inline client"),
+        },
+        _ => panic!("expected remote rule set"),
+    }
+}
+
+#[test]
+fn test_parse_route_default_http_client() {
+    let json = r#"{
+        "route": {
+            "default_http_client": "shared-client"
+        }
+    }"#;
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    let route = config.route.unwrap();
+    assert_eq!(route.default_http_client.as_deref(), Some("shared-client"));
+}
+
+#[test]
+fn test_parse_tls_spoof_and_engine() {
+    let json = r#"{
+        "type": "trojan",
+        "tag": "t",
+        "server": "example.com",
+        "server_port": 443,
+        "password": "pw",
+        "tls": {
+            "enabled": true,
+            "server_name": "example.com",
+            "engine": "apple",
+            "spoof": "www.bing.com",
+            "spoof_method": "sni"
+        }
+    }"#;
+    let outbound: Outbound = serde_json::from_str(json).unwrap();
+    match outbound {
+        Outbound::Trojan(t) => {
+            let tls = t.tls.unwrap();
+            assert_eq!(tls.engine.as_deref(), Some("apple"));
+            assert_eq!(tls.spoof.as_deref(), Some("www.bing.com"));
+            assert_eq!(tls.spoof_method.as_deref(), Some("sni"));
+        }
+        other => panic!("expected trojan outbound, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_hysteria_quic_fields_on_outbound() {
+    let json = r#"{
+        "type": "hysteria",
+        "tag": "hy",
+        "server": "example.com",
+        "server_port": 443,
+        "auth_str": "pw",
+        "up_mbps": 100,
+        "down_mbps": 100,
+        "stream_receive_window": "8MB",
+        "connection_receive_window": "64MB",
+        "disable_path_mtu_discovery": true,
+        "keep_alive_period": "15s",
+        "max_concurrent_streams": 64,
+        "initial_packet_size": 1200
+    }"#;
+    let outbound: Outbound = serde_json::from_str(json).unwrap();
+    match outbound {
+        Outbound::Hysteria(h) => {
+            assert_eq!(h.quic.stream_receive_window.as_deref(), Some("8MB"));
+            assert_eq!(h.quic.connection_receive_window.as_deref(), Some("64MB"));
+            assert!(h.quic.disable_path_mtu_discovery);
+            assert_eq!(h.quic.keep_alive_period.as_deref(), Some("15s"));
+            assert_eq!(h.quic.max_concurrent_streams, Some(64));
+            assert_eq!(h.quic.initial_packet_size, Some(1200));
+        }
+        other => panic!("expected hysteria outbound, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_tuic_quic_fields_on_outbound() {
+    let json = r#"{
+        "type": "tuic",
+        "tag": "tu",
+        "server": "example.com",
+        "server_port": 443,
+        "uuid": "00000000-0000-0000-0000-000000000000",
+        "password": "pw",
+        "idle_timeout": "30s",
+        "keep_alive_period": "10s"
+    }"#;
+    let outbound: Outbound = serde_json::from_str(json).unwrap();
+    match outbound {
+        Outbound::Tuic(t) => {
+            assert_eq!(t.quic.idle_timeout.as_deref(), Some("30s"));
+            assert_eq!(t.quic.keep_alive_period.as_deref(), Some("10s"));
+        }
+        other => panic!("expected tuic outbound, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_hysteria2_quic_fields_on_inbound() {
+    let json = r#"{
+        "type": "hysteria2",
+        "tag": "h2in",
+        "listen": "::",
+        "listen_port": 443,
+        "stream_receive_window": "8MB",
+        "connection_receive_window": "64MB",
+        "disable_path_mtu_discovery": true
+    }"#;
+    let inbound: Inbound = serde_json::from_str(json).unwrap();
+    match inbound {
+        Inbound::Hysteria2(h) => {
+            assert_eq!(h.quic.stream_receive_window.as_deref(), Some("8MB"));
+            assert_eq!(h.quic.connection_receive_window.as_deref(), Some("64MB"));
+            assert!(h.quic.disable_path_mtu_discovery);
+        }
+        other => panic!("expected hysteria2 inbound, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_certificate_provider_http_client() {
+    let json = r#"{
+        "certificate_providers": [
+            {
+                "type": "tailscale",
+                "tag": "ts-cert",
+                "endpoint": "ts",
+                "http_client": "shared"
+            }
+        ]
+    }"#;
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.certificate_providers.len(), 1);
+    match &config.certificate_providers[0] {
+        CertificateProvider::Tailscale(p) => match p.http_client.as_ref().unwrap() {
+            HttpClientRef::Tag(t) => assert_eq!(t, "shared"),
+            _ => panic!("expected tag ref"),
+        },
+        _ => panic!("expected tailscale provider"),
+    }
+}
+
+#[test]
+fn test_parse_tailscale_dns_accept_search_domain() {
+    let json = r#"{
+        "dns": {
+            "servers": [
+                {"type": "tailscale", "tag": "ts", "endpoint": "ts", "accept_search_domain": true}
+            ]
+        }
+    }"#;
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    let server = &config.dns.unwrap().servers[0];
+    match server {
+        turntable::config::dns::DnsServer::Tailscale(ts) => {
+            assert!(ts.accept_search_domain);
+        }
+        _ => panic!("expected tailscale server"),
+    }
+}
+
+#[test]
+fn test_validation_warns_on_114_features_for_older_target() {
+    use turntable::config::validation::ConfigWarning;
+
+    let json = r#"{
+        "http_clients": [{"tag": "c", "engine": "apple"}],
+        "route": {
+            "default_http_client": "c",
+            "rule_set": [
+                {"type": "remote", "tag": "r", "url": "https://example.com/r", "http_client": "c"}
+            ]
+        },
+        "dns": {
+            "servers": [
+                {"type": "tailscale", "tag": "ts", "endpoint": "ts", "accept_search_domain": true}
+            ]
+        },
+        "certificate_providers": [
+            {"type": "tailscale", "tag": "cp", "endpoint": "ts", "http_client": "c"}
+        ],
+        "outbounds": [
+            {
+                "type": "trojan",
+                "tag": "t",
+                "server": "example.com",
+                "server_port": 443,
+                "password": "pw",
+                "tls": {"enabled": true, "spoof": "www.bing.com", "engine": "apple"}
+            },
+            {
+                "type": "tuic",
+                "tag": "tu",
+                "server": "example.com",
+                "server_port": 443,
+                "uuid": "00000000-0000-0000-0000-000000000000",
+                "password": "pw",
+                "idle_timeout": "30s"
+            }
+        ]
+    }"#;
+
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    let report = config.validate_for_version(&SingBoxVersion::new(1, 13));
+
+    let features: Vec<String> = report
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            ConfigWarning::UnsupportedFeature { feature, .. } => Some(feature.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(features.iter().any(|f| f == "http_clients"));
+    assert!(features.iter().any(|f| f == "route.default_http_client"));
+    assert!(features.iter().any(|f| f.contains("accept_search_domain")));
+    assert!(features.iter().any(|f| f == "certificate_provider.http_client"));
+    assert!(features.iter().any(|f| f.contains("http_client") && f.contains("rule_set")));
+    assert!(features.iter().any(|f| f.contains("tls.spoof")));
+    assert!(features.iter().any(|f| f.contains("tls.engine")));
+    assert!(features.iter().any(|f| f.contains("tuic") && f.contains("QUIC tuning")));
+}
+
+#[test]
+fn test_validation_warns_on_deprecated_hysteria_tuning_for_114() {
+    use turntable::config::validation::ConfigWarning;
+
+    let json = r#"{
+        "outbounds": [
+            {
+                "type": "hysteria",
+                "tag": "hy",
+                "server": "example.com",
+                "server_port": 443,
+                "auth_str": "pw",
+                "recv_window_conn": 16777216,
+                "recv_window": 67108864,
+                "disable_mtu_discovery": true
+            }
+        ],
+        "route": {
+            "rule_set": [
+                {"type": "remote", "tag": "r", "url": "https://example.com/r", "download_detour": "direct"}
+            ]
+        }
+    }"#;
+
+    let config: SingBoxConfig = serde_json::from_str(json).unwrap();
+    let report = config.validate_for_version(&SingBoxVersion::new(1, 14));
+    let features: Vec<String> = report
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            ConfigWarning::DeprecatedFeature { feature, .. } => Some(feature.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(features.iter().any(|f| f.contains("legacy QUIC tuning")));
+    assert!(features.iter().any(|f| f.contains("download_detour")));
+}
+
+#[test]
+fn test_builder_http_client() {
+    let config = SingBoxConfig::builder()
+        .http_client(HttpClient {
+            tag: "primary".to_string(),
+            ..Default::default()
+        })
+        .build();
+    assert_eq!(config.http_clients.len(), 1);
+    assert_eq!(config.http_clients[0].tag, "primary");
 }

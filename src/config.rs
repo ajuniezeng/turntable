@@ -10,7 +10,7 @@ use crate::config::ntp::Ntp;
 use crate::config::outbound::Outbound;
 use crate::config::route::Route;
 use crate::config::service::Service;
-use crate::config::shared::CertificateProvider;
+use crate::config::shared::{CertificateProvider, HttpClient};
 
 pub mod certificate;
 pub mod dns;
@@ -53,6 +53,15 @@ pub struct SingBoxConfig {
     /// Certificate provider configurations (since 1.14.0)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub certificate_providers: Vec<CertificateProvider>,
+
+    /// Shared HTTP client pool (since sing-box 1.14.0).
+    ///
+    /// Each entry must carry a non-empty [`HttpClient::tag`]; the tag is how
+    /// other configuration sites (remote rule-sets, certificate providers,
+    /// etc.) reference the client via
+    /// [`HttpClientRef::Tag`][crate::config::shared::HttpClientRef::Tag].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub http_clients: Vec<HttpClient>,
 
     /// Endpoint configurations (since 1.11.0)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -155,6 +164,21 @@ impl SingBoxConfigBuilder {
     /// Set certificate providers.
     pub fn certificate_providers(mut self, providers: Vec<CertificateProvider>) -> Self {
         self.config.certificate_providers = providers;
+        self
+    }
+
+    /// Append a single [`HttpClient`] to [`SingBoxConfig::http_clients`].
+    ///
+    /// The `client.tag` must be non-empty for the entry to be referenceable by
+    /// [`HttpClientRef::Tag`][crate::config::shared::HttpClientRef::Tag].
+    pub fn http_client(mut self, client: HttpClient) -> Self {
+        self.config.http_clients.push(client);
+        self
+    }
+
+    /// Replace the entire [`SingBoxConfig::http_clients`] list.
+    pub fn http_clients(mut self, clients: Vec<HttpClient>) -> Self {
+        self.config.http_clients = clients;
         self
     }
 

@@ -6,5 +6,5 @@ pub mod transform;
 pub mod webdav;
 
 pub fn get_version() -> String {
-    "0.4.0".to_string()
+    env!("CARGO_PKG_VERSION").to_string()
 }

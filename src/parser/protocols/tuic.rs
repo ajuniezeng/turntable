@@ -92,6 +92,7 @@ impl ProtocolParser for TuicParser {
             heartbeat: params.get("heartbeat").cloned(),
             network: None,
             tls,
+            quic: Default::default(),
             dial: DialFields::default(),
         }))
     }

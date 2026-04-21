@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::config::serde_helpers::{
     default_wireguard_mtu, is_default_wireguard_mtu, is_false, is_zero_u32,
 };
-use crate::config::shared::{DialFields, OutboundTlsConfig};
+use crate::config::shared::{DialFields, OutboundTlsConfig, QuicFields};
 
 // ============================================================================
 // Outbound Enum
@@ -672,15 +672,27 @@ pub struct HysteriaOutbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_str: Option<String>,
 
-    /// Receive window connection size
+    /// Per-stream receive-window size, in bytes.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::stream_receive_window`][crate::config::shared::QuicFields::stream_receive_window]
+    /// on [`quic`][HysteriaOutbound::quic].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv_window_conn: Option<u64>,
 
-    /// Receive window size
+    /// Per-connection receive-window size, in bytes.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::connection_receive_window`][crate::config::shared::QuicFields::connection_receive_window]
+    /// on [`quic`][HysteriaOutbound::quic].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv_window: Option<u64>,
 
-    /// Disable MTU discovery
+    /// Disable QUIC path-MTU discovery.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`QuicFields::disable_path_mtu_discovery`][crate::config::shared::QuicFields::disable_path_mtu_discovery]
+    /// on [`quic`][HysteriaOutbound::quic].
     #[serde(default, skip_serializing_if = "is_false")]
     pub disable_mtu_discovery: bool,
 
@@ -691,6 +703,14 @@ pub struct HysteriaOutbound {
     /// TLS configuration (required)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<OutboundTlsConfig>,
+
+    /// Unified QUIC / HTTP/2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Flattened into the outbound at serialization time, so the seven
+    /// knobs documented on [`QuicFields`] appear as top-level keys on this
+    /// outbound.
+    #[serde(flatten)]
+    pub quic: QuicFields,
 
     /// Dial fields
     #[serde(flatten)]
@@ -828,6 +848,14 @@ pub struct TuicOutbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<OutboundTlsConfig>,
 
+    /// Unified QUIC / HTTP/2 tuning fields (since sing-box 1.14.0).
+    ///
+    /// Flattened into the outbound at serialization time, so the seven
+    /// knobs documented on [`QuicFields`] appear as top-level keys on this
+    /// outbound.
+    #[serde(flatten)]
+    pub quic: QuicFields,
+
     /// Dial fields
     #[serde(flatten)]
     pub dial: DialFields,
@@ -891,6 +919,10 @@ pub struct Hysteria2Outbound {
     /// Enable Brutal debug logging
     #[serde(default, skip_serializing_if = "is_false")]
     pub brutal_debug: bool,
+
+    /// Shared QUIC tuning parameters (since 1.14.0)
+    #[serde(flatten)]
+    pub quic: QuicFields,
 
     /// Dial fields
     #[serde(flatten)]

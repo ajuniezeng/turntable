@@ -111,6 +111,7 @@ impl ProtocolParser for Hysteria2Parser {
             tls,
             bbr_profile: None,
             brutal_debug: false,
+            quic: Default::default(),
             dial: DialFields::default(),
         }))
     }

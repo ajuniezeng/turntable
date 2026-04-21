@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 use crate::config::serde_helpers::{is_false, is_zero_i32, is_zero_u16, string_or_vec, u16_or_vec};
-use crate::config::shared::{DomainResolver, DomainStrategy, NetworkType};
+use crate::config::shared::{DomainResolver, DomainStrategy, HttpClientRef, NetworkType};
 
 // ============================================================================
 // Route Configuration
@@ -73,6 +73,17 @@ pub struct Route {
     /// Default fallback delay (since 1.11.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_fallback_delay: Option<String>,
+
+    /// Default HTTP client tag used for route-triggered downloads (remote
+    /// rule-sets without an explicit `http_client`, and other internal
+    /// downloads), since sing-box 1.14.0.
+    ///
+    /// Must match a
+    /// [`HttpClient::tag`][crate::config::shared::HttpClient::tag] registered
+    /// in
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_http_client: Option<String>,
 
     // Deprecated fields (removed in 1.12.0)
     /// GeoIP database configuration (deprecated in 1.8.0, removed in 1.12.0)
@@ -1109,9 +1120,25 @@ pub struct RemoteRuleSet {
     /// Download URL of the rule set (required)
     pub url: String,
 
-    /// Outbound tag for downloading
+    /// Outbound tag used to download this rule-set.
+    ///
+    /// **Deprecated in sing-box 1.14.0.** Prefer
+    /// [`http_client`][RemoteRuleSet::http_client] (or
+    /// [`Route::default_http_client`]) which lets multiple rule-sets share a
+    /// fully-configured HTTP client rather than just picking an outbound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_detour: Option<String>,
+
+    /// HTTP client used to download this rule-set (since sing-box 1.14.0).
+    ///
+    /// Accepts either a tag (matching an entry in
+    /// [`SingBoxConfig::http_clients`][crate::config::SingBoxConfig::http_clients])
+    /// or an inline [`HttpClient`][crate::config::shared::HttpClient]
+    /// definition. Overrides [`Route::default_http_client`] for this
+    /// rule-set. Supersedes the deprecated
+    /// [`download_detour`][RemoteRuleSet::download_detour].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_client: Option<HttpClientRef>,
 
     /// Update interval (default: 1d)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1126,8 +1153,16 @@ impl RemoteRuleSet {
             url: url.into(),
             format: None,
             download_detour: None,
+            http_client: None,
             update_interval: None,
         }
+    }
+
+    /// Set the [`HttpClientRef`] used to download this rule-set (since
+    /// sing-box 1.14.0). Replaces any previous value.
+    pub fn with_http_client(mut self, client: HttpClientRef) -> Self {
+        self.http_client = Some(client);
+        self
     }
 
     /// Set the format.

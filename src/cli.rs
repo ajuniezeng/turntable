@@ -12,8 +12,8 @@ pub struct Args {
     )]
     pub generator: String,
 
-    /// Log level set to DEBUG
-    #[arg(short, long, help = "Emit debug log")]
+    /// Log level set to TRACE
+    #[arg(short, long, help = "Emit trace log")]
     pub verbose: bool,
 
     /// Override output file path
