@@ -1140,6 +1140,26 @@ pub struct NaiveOutbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
 
+    /// Number of concurrent tunnel connections
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub insecure_concurrency: u32,
+
+    /// Extra headers to send in HTTP requests
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra_headers: HashMap<String, String>,
+
+    /// UDP over TCP protocol settings
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_over_tcp: Option<UdpOverTcp>,
+
+    /// Use QUIC instead of HTTP/2
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub quic: bool,
+
+    /// QUIC congestion control algorithm: bbr (default), bbr2, cubic, reno
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_congestion_control: Option<String>,
+
     /// TLS configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<OutboundTlsConfig>,
