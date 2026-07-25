@@ -26,7 +26,14 @@ A Rust command-line tool for generating [sing-box](https://sing-box.sagernet.org
   - Subscription caching with configurable TTL
   - Diff view between cached and new subscriptions
 
-- **Version Compatibility**: Target specific sing-box versions (1.10 - 1.14, including 1.14.0-alpha.44 features) with automatic feature validation
+- **Version Compatibility**: Target sing-box 1.10 - 1.14. The latest target is validated against the official 1.14.0-beta.2 JSON Schema.
+
+- **Lossless Templates**: Preserve schema-supported template fields even when
+  Turntable does not yet expose a typed Rust model for them
+
+- **Layered Validation**: Validate structure with the official schema, resolve
+  schema-annotated tag references, detect dependency cycles and tag
+  collisions, and optionally run the matching sing-box binary
 
 - **Cloud Upload**: Automatically upload generated configs to WebDAV-compatible storage
 
@@ -88,8 +95,8 @@ template = "./templates/1.14.json"
 # Output file path
 output = "./out/config.json"
 
-# Target sing-box version (1.10, 1.11, 1.12, 1.13, or 1.14)
-target_version = "1.14"
+# Exact schema-backed sing-box release.
+target_version = "1.14.0-beta.2"
 
 # IPv4-only mode: remove IPv6 outbounds and set DNS strategy to ipv4_only
 ipv4_only = false
@@ -112,6 +119,9 @@ cache_ttl = 60  # minutes
 
 # Show diff between cached and new subscriptions
 diff_subscription = false
+
+# Optional: run authoritative validation with a matching sing-box binary
+# sing_box_binary = "/usr/local/bin/sing-box"
 
 # WebDAV upload configuration
 webdav_upload = false
@@ -136,13 +146,38 @@ url = "https://example.com/another-subscription"
 
 The template should be a valid sing-box configuration JSON file. Turntable will:
 
-1. Load your template
+1. Load your template without discarding fields it does not need to modify
 2. Fetch and parse all subscriptions
 3. Generate subscription and country-code selectors
 4. Update existing selectors in the template with new selector tags
 5. Append all outbounds to the configuration
-6. Validate the config against the target sing-box version
-7. Write the final configuration to the output file
+6. Validate 1.14 configs against the bundled official 1.14.0-beta.2 JSON
+   Schema
+7. Resolve schema-annotated tag references, reject duplicate tags and
+   dependency cycles, and check selector invariants
+8. Optionally run `sing-box check` using `sing_box_binary`
+9. Write the final configuration to the output file
+
+For the 1.14 target, Turntable adds the canonical `$schema` URI when the
+template does not already specify one:
+
+```json
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json"
+}
+```
+
+The optional `sing_box_binary` is the final authority for runtime and
+build-tag-dependent checks that JSON Schema cannot express. For schema-backed
+targets, Turntable verifies the binary's exact release before running the
+check; its build tags must still match the schema. Turntable runs the check in
+the output directory so relative paths have the same base as the generated
+configuration.
+
+`1.14` remains a temporary compatibility alias for `1.14.0-beta.2`, but exact
+release identifiers are preferred. A schema-era release is rejected unless its
+schema is bundled, preventing a configuration from being checked against the
+wrong release.
 
 Example template structure:
 

@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    config::schema::{self, SCHEMA_VERSION, SchemaBundle},
     config::version::{LATEST_VERSION, SingBoxVersion},
     webdav::WebDavConfig,
 };
@@ -63,6 +64,12 @@ pub struct GeneratorConfig {
     #[serde(default)]
     pub diff_subscription: bool,
 
+    /// Optional sing-box binary used for authoritative native validation.
+    ///
+    /// The configured binary must match the target release and build tags.
+    #[serde(default)]
+    pub sing_box_binary: Option<String>,
+
     /// Enable WebDAV upload
     #[serde(default)]
     pub webdav_upload: bool,
@@ -102,10 +109,15 @@ impl GeneratorConfig {
             anyhow::bail!("At least one subscription is required");
         }
 
-        // Validate target_version
-        SingBoxVersion::from_str(&config.target_version).map_err(|e| {
-            anyhow::anyhow!("Invalid target_version: {}: {}", config.target_version, e)
-        })?;
+        validate_target_version(&config.target_version)?;
+
+        if config
+            .sing_box_binary
+            .as_deref()
+            .is_some_and(|binary| binary.trim().is_empty())
+        {
+            anyhow::bail!("sing_box_binary must not be empty");
+        }
 
         // Validate WebDAV config if enabled
         config.get_webdav_config().validate()?;
@@ -126,8 +138,36 @@ impl GeneratorConfig {
 
     /// Get the parsed target version.
     pub fn get_target_version(&self) -> SingBoxVersion {
-        // Safe to unwrap because we validated in from_toml
-        SingBoxVersion::from_str(&self.target_version).unwrap_or_else(|_| SingBoxVersion::latest())
+        if let Some(bundle) = self.get_schema_bundle() {
+            let numeric_release = bundle
+                .release()
+                .split_once('-')
+                .map_or(bundle.release(), |(numeric, _)| numeric);
+            let components = numeric_release
+                .split('.')
+                .map(str::parse::<u32>)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .expect("registered schema releases must start with a numeric version");
+            return match components.as_slice() {
+                [major, minor] => SingBoxVersion::new(*major, *minor),
+                [major, minor, patch] => SingBoxVersion::with_patch(*major, *minor, *patch),
+                _ => panic!("registered schema releases must use MAJOR.MINOR[.PATCH]"),
+            };
+        }
+
+        SingBoxVersion::from_str(&self.target_version)
+            .expect("generator target_version is validated during parsing")
+    }
+
+    /// Return the schema selected by this target, if it is schema-backed.
+    pub fn get_schema_bundle(&self) -> Option<&'static SchemaBundle> {
+        schema::for_target(&self.target_version)
+    }
+
+    /// Return the canonical target release after resolving aliases.
+    pub fn resolved_target_version(&self) -> &str {
+        self.get_schema_bundle()
+            .map_or_else(|| self.target_version.trim(), |bundle| bundle.release())
     }
 
     /// Load generator config from file path
@@ -161,7 +201,7 @@ fn default_output() -> String {
 }
 
 fn default_target_version() -> String {
-    format!("{}.{}", LATEST_VERSION.0, LATEST_VERSION.1)
+    SCHEMA_VERSION.to_string()
 }
 
 fn default_true() -> bool {
@@ -170,4 +210,42 @@ fn default_true() -> bool {
 
 fn default_cache_ttl() -> u64 {
     60
+}
+
+fn validate_target_version(target: &str) -> Result<()> {
+    if schema::for_target(target).is_some() {
+        return Ok(());
+    }
+
+    match SingBoxVersion::from_str(target) {
+        Ok(version) if version.major == 1 && version.minor >= LATEST_VERSION.1 => {
+            let releases = schema::supported_releases().collect::<Vec<_>>().join(", ");
+            anyhow::bail!(
+                "No bundled schema for target_version '{}'; available schema releases: {}",
+                target.trim(),
+                releases
+            );
+        }
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let numeric_prefix = target.trim().split_once('-').map(|(numeric, _)| numeric);
+            if numeric_prefix
+                .and_then(|numeric| SingBoxVersion::from_str(numeric).ok())
+                .is_some_and(|version| version.major == 1 && version.minor >= LATEST_VERSION.1)
+            {
+                let releases = schema::supported_releases().collect::<Vec<_>>().join(", ");
+                anyhow::bail!(
+                    "No bundled schema for target_version '{}'; available schema releases: {}",
+                    target.trim(),
+                    releases
+                );
+            }
+
+            Err(anyhow::anyhow!(
+                "Invalid target_version: {}: {}",
+                target,
+                error
+            ))
+        }
+    }
 }

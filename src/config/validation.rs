@@ -765,6 +765,15 @@ impl SingBoxConfig {
     fn check_version_compatibility(&self, version: &SingBoxVersion, result: &mut ValidationResult) {
         let version_str = version.to_string();
 
+        // Check the top-level JSON Schema URI (since 1.14.0-beta.2).
+        if self.schema.is_some() && version < &SingBoxVersion::new(1, 14) {
+            result.add_warning(ConfigWarning::UnsupportedFeature {
+                feature: "$schema".to_string(),
+                min_version: "1.14".to_string(),
+                target_version: version_str.clone(),
+            });
+        }
+
         // Check endpoints (since 1.11)
         if !self.endpoints.is_empty() && !version.supports_endpoints() {
             result.add_warning(ConfigWarning::UnsupportedFeature {
@@ -1067,15 +1076,13 @@ impl SingBoxConfig {
                     });
                 }
             }
-            Outbound::Tuic(t) => {
-                if t.quic.is_set() && version < &SingBoxVersion::new(1, 14) {
-                    let tag = t.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
-                    result.add_warning(ConfigWarning::UnsupportedFeature {
-                        feature: format!("tuic outbound '{}' QUIC tuning fields", tag),
-                        min_version: "1.14".to_string(),
-                        target_version: version_str.to_string(),
-                    });
-                }
+            Outbound::Tuic(t) if t.quic.is_set() && version < &SingBoxVersion::new(1, 14) => {
+                let tag = t.tag.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                result.add_warning(ConfigWarning::UnsupportedFeature {
+                    feature: format!("tuic outbound '{}' QUIC tuning fields", tag),
+                    min_version: "1.14".to_string(),
+                    target_version: version_str.to_string(),
+                });
             }
             _ => {}
         }
@@ -1815,16 +1822,15 @@ impl SingBoxConfig {
                         });
                     }
                 }
-                Outbound::Tor(t) => {
+                Outbound::Tor(t)
                     if t.dial.network_strategy.is_some()
                         && (t.dial.bind_interface.is_some()
                             || t.dial.inet4_bind_address.is_some()
-                            || t.dial.inet6_bind_address.is_some())
-                    {
-                        result.add_warning(ConfigWarning::DialFieldsBindStrategyConflict {
-                            outbound: t.tag.clone(),
-                        });
-                    }
+                            || t.dial.inet6_bind_address.is_some()) =>
+                {
+                    result.add_warning(ConfigWarning::DialFieldsBindStrategyConflict {
+                        outbound: t.tag.clone(),
+                    });
                 }
                 // Selector, UrlTest, Block, Dns don't have dial fields with these conflicts
                 _ => {}

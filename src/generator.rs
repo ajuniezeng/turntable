@@ -10,13 +10,15 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 use crate::config::SingBoxConfig;
-use crate::config::dns::{Dns, Strategy};
+use crate::config::dns::Strategy;
+use crate::config::document::SingBoxDocument;
 use crate::config::outbound::Outbound;
+use crate::config::version::SingBoxVersion;
 use crate::parser::{SubscriptionType, detect_subscription_type, parse_subscription};
 use crate::transform::{
     DETOUR_SELECTOR_TAG, collect_non_detour_tags, filter_detour_outbounds, filter_ipv6_outbounds,
     generate_country_code_selectors_filtered, generate_detour_selector,
-    generate_subscription_selector, get_outbound_tag, update_selectors_with_new_tags,
+    generate_subscription_selector, get_outbound_tag,
 };
 use crate::webdav::upload_to_webdav;
 
@@ -25,6 +27,7 @@ pub mod cache;
 pub mod diff;
 pub mod generator_config;
 pub mod helpers;
+pub mod native_check;
 pub mod subscription;
 
 // Re-exports
@@ -59,12 +62,24 @@ impl Generator {
     }
 
     /// Run the generation process
-    pub async fn generate(&self) -> Result<SingBoxConfig> {
+    pub async fn generate(&self) -> Result<SingBoxDocument> {
         info!("Starting config generation");
+        if crate::config::schema::is_alias(&self.config.target_version) {
+            warn!(
+                target = self.config.target_version,
+                resolved = self.config.resolved_target_version(),
+                "Using a compatibility target alias; prefer the exact release identifier"
+            );
+        }
 
         // 1. Load template
         let mut config = self.load_template().await?;
-        debug!("Loaded template with {} outbounds", config.outbounds.len());
+        debug!(
+            "Loaded template with {} outbounds",
+            config
+                .outbound_count()
+                .context("Invalid template outbounds")?
+        );
 
         // 2. Fetch and parse all subscriptions (keeping track of subscription names)
         let subscriptions_with_outbounds = self.fetch_subscriptions_with_names().await?;
@@ -79,8 +94,9 @@ impl Generator {
             info!("Filtering out IPv6 outbounds (ipv4_only=true)");
 
             // Set DNS strategy to ipv4_only
-            let dns = config.dns.get_or_insert_with(Dns::default);
-            dns.strategy = Some(Strategy::Ipv4Only);
+            config
+                .set_dns_strategy(Strategy::Ipv4Only)
+                .context("Failed to update template DNS strategy")?;
             debug!("Set DNS strategy to ipv4_only");
 
             subscriptions_with_outbounds
@@ -186,7 +202,9 @@ impl Generator {
                 "Updating template selectors with {} new tags",
                 new_selector_tags.len()
             );
-            update_selectors_with_new_tags(&mut config.outbounds, &new_selector_tags);
+            config
+                .update_selectors(&new_selector_tags)
+                .context("Failed to update template selectors")?;
         }
 
         // 10. Add all new outbounds to config:
@@ -196,13 +214,33 @@ impl Generator {
         //    - All subscription outbounds
         if let Some(selector) = detour_selector {
             info!("Adding detour selector '{}'", DETOUR_SELECTOR_TAG);
-            config.outbounds.push(selector);
+            config
+                .extend_outbounds(std::iter::once(selector))
+                .context("Failed to append detour selector")?;
         }
-        config.outbounds.extend(subscription_selectors);
-        config.outbounds.extend(country_selectors);
-        config.outbounds.extend(all_subscription_outbounds);
+        config
+            .extend_outbounds(subscription_selectors)
+            .context("Failed to append subscription selectors")?;
+        config
+            .extend_outbounds(country_selectors)
+            .context("Failed to append country selectors")?;
+        config
+            .extend_outbounds(all_subscription_outbounds)
+            .context("Failed to append subscription outbounds")?;
 
-        info!("Final config has {} outbounds", config.outbounds.len());
+        if let Some(schema_bundle) = self.config.get_schema_bundle() {
+            config.ensure_schema_uri_for(schema_bundle);
+            config
+                .validate_schema_with(schema_bundle)
+                .context("Generated configuration does not match the official sing-box schema")?;
+        }
+
+        info!(
+            "Final config has {} outbounds",
+            config
+                .outbound_count()
+                .context("Invalid generated outbounds")?
+        );
 
         Ok(config)
     }
@@ -212,41 +250,62 @@ impl Generator {
         let config = self.generate().await?;
 
         // Get target version for validation
-        let target_version = self.config.get_target_version();
-        info!("Validating config for sing-box version {}", target_version);
+        info!(
+            "Validating config for sing-box version {}",
+            self.config.resolved_target_version()
+        );
 
-        // Validate the generated config against target version and log any warnings/errors
-        let validation_result = config.validate_for_version(&target_version);
-        if validation_result.has_warnings() {
-            warn!(
-                "Configuration has {} warning(s)",
-                validation_result.warning_count()
+        if let Some(schema_bundle) = self.config.get_schema_bundle() {
+            info!(
+                "Configuration matches the official sing-box {} schema",
+                schema_bundle.release()
             );
-            validation_result.log_warnings();
-        }
-        if validation_result.has_errors() {
-            warn!(
-                "Configuration has {} validation error(s)",
-                validation_result.error_count()
-            );
-            validation_result.log_errors();
+
+            let warnings = config
+                .validate_semantics_with(schema_bundle)
+                .context("Generated configuration has invalid cross-references")?;
+            for warning in warnings {
+                warn!(warning = %warning, "configuration semantic warning");
+            }
+        } else {
+            // Older sing-box releases predate the official schema. Preserve
+            // the existing typed compatibility checks for those targets.
+            let target_version = self.config.get_target_version();
+            let typed: SingBoxConfig = serde_json::from_value(config.to_value())
+                .context("Failed to build legacy validation view")?;
+            log_typed_validation(&typed, &target_version);
         }
 
         let output_path = output_override.unwrap_or(&self.config.output);
         let expanded_path = expand_tilde(output_path);
         let path = Path::new(&expanded_path);
+        let output_directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
 
         // Create parent directories if they don't exist
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("Failed to create output directory {:?}", parent))?;
-        }
+        tokio::fs::create_dir_all(output_directory)
+            .await
+            .with_context(|| format!("Failed to create output directory {:?}", output_directory))?;
 
         // Serialize to pretty JSON
         let json = config
             .to_json_pretty()
             .context("Failed to serialize config to JSON")?;
+
+        if let Some(binary) = &self.config.sing_box_binary {
+            native_check::validate(
+                binary,
+                &json,
+                output_directory,
+                self.config
+                    .get_schema_bundle()
+                    .map(crate::config::schema::SchemaBundle::release),
+            )
+            .await
+            .context("Configured sing-box binary rejected the generated configuration")?;
+        }
 
         // Write to file
         tokio::fs::write(path, &json)
@@ -265,7 +324,7 @@ impl Generator {
     }
 
     /// Load the template configuration
-    async fn load_template(&self) -> Result<SingBoxConfig> {
+    async fn load_template(&self) -> Result<SingBoxDocument> {
         let template_path = &self.config.template;
         info!("Loading template from {}", template_path);
 
@@ -279,8 +338,13 @@ impl Generator {
                     .with_context(|| format!("Failed to read template from {}", expanded))?
             };
 
-        let config = SingBoxConfig::from_json(&content)
-            .context("Failed to parse template as sing-box config")?;
+        let config = if let Some(schema_bundle) = self.config.get_schema_bundle() {
+            SingBoxDocument::from_json_with_schema(&content, schema_bundle)
+                .context("Template does not match the official sing-box schema")?
+        } else {
+            SingBoxDocument::from_json_unchecked(&content)
+                .context("Failed to parse template as sing-box config")?
+        };
 
         Ok(config)
     }
@@ -509,15 +573,35 @@ impl Generator {
     }
 }
 
+fn log_typed_validation(config: &SingBoxConfig, target_version: &SingBoxVersion) {
+    let validation_result = config.validate_for_version(target_version);
+    if validation_result.has_warnings() {
+        warn!(
+            "Configuration has {} warning(s)",
+            validation_result.warning_count()
+        );
+        validation_result.log_warnings();
+    }
+    if validation_result.has_errors() {
+        warn!(
+            "Configuration has {} validation error(s)",
+            validation_result.error_count()
+        );
+        validation_result.log_errors();
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
-    use crate::config::version::SingBoxVersion;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
     const EXAMPLE_GENERATOR_TOML: &str = r#"
     template = "./templates/1.13.json"
@@ -544,6 +628,72 @@ name = "Provider1"
 url = "https://example.com/sub1"
 "#;
 
+    fn temporary_template_path() -> std::path::PathBuf {
+        let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "turntable-schema-test-{}-{sequence}.json",
+            std::process::id()
+        ))
+    }
+
+    fn generator_for_template(path: &Path) -> Generator {
+        let toml = format!(
+            r#"
+template = "{}"
+target_version = "1.14.0-beta.2"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#,
+            path.display()
+        );
+        Generator::new(GeneratorConfig::from_toml(&toml).unwrap())
+    }
+
+    #[tokio::test]
+    async fn latest_template_loading_uses_schema_and_preserves_beta_2_fields() {
+        let path = temporary_template_path();
+        std::fs::write(
+            &path,
+            r#"{
+              "route": {
+                "rule_set": [{
+                  "type": "remote",
+                  "tag": "remote",
+                  "format": "source",
+                  "url": "https://example.com/rules.json",
+                  "initial_path": "/bootstrap"
+                }]
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let document = generator_for_template(&path).load_template().await.unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(
+            document.to_value()["route"]["rule_set"][0]["initial_path"],
+            "/bootstrap"
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_template_loading_rejects_fields_outside_the_schema() {
+        let path = temporary_template_path();
+        std::fs::write(&path, r#"{"future_top_level": true}"#).unwrap();
+
+        let error = generator_for_template(&path)
+            .load_template()
+            .await
+            .unwrap_err();
+        std::fs::remove_file(path).unwrap();
+
+        assert!(error.to_string().contains("official sing-box schema"));
+        assert!(format!("{error:#}").contains("future_top_level"));
+    }
+
     #[test]
     fn test_parse_full_generator_config() {
         let config = GeneratorConfig::from_toml(EXAMPLE_GENERATOR_TOML).unwrap();
@@ -558,6 +708,7 @@ url = "https://example.com/sub1"
         assert!(!config.cache_subscription);
         assert_eq!(config.cache_ttl, 60);
         assert!(!config.diff_subscription);
+        assert!(config.sing_box_binary.is_none());
         assert_eq!(config.subscriptions.len(), 1);
         assert_eq!(config.subscriptions[0].name, "MyProvider");
         assert_eq!(
@@ -574,14 +725,48 @@ url = "https://example.com/sub1"
         // Check defaults
         assert_eq!(config.output, "./out/config.json");
         assert!(!config.ipv4_only);
-        assert_eq!(config.target_version, "1.14");
+        assert_eq!(config.target_version, "1.14.0-beta.2");
+        assert_eq!(config.resolved_target_version(), "1.14.0-beta.2");
+        assert!(config.get_schema_bundle().is_some());
         assert!(config.country_code_outbound_selectors);
         assert!(!config.no_detour);
         assert!(!config.detour_selector);
         assert!(!config.cache_subscription);
         assert_eq!(config.cache_ttl, 60);
         assert!(!config.diff_subscription);
+        assert!(config.sing_box_binary.is_none());
         assert_eq!(config.subscriptions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_native_sing_box_binary() {
+        let toml = r#"
+template = "./template.json"
+sing_box_binary = "/opt/sing-box/bin/sing-box"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml).unwrap();
+        assert_eq!(
+            config.sing_box_binary.as_deref(),
+            Some("/opt/sing-box/bin/sing-box")
+        );
+    }
+
+    #[test]
+    fn test_empty_native_sing_box_binary_fails() {
+        let toml = r#"
+template = "./template.json"
+sing_box_binary = " "
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let error = GeneratorConfig::from_toml(toml).unwrap_err();
+        assert!(error.to_string().contains("sing_box_binary"));
     }
 
     #[test]
@@ -722,18 +907,53 @@ url = "https://example.com/sub1"
         let config = GeneratorConfig::from_toml(toml_1_12).unwrap();
         assert_eq!(config.target_version, "1.12");
 
-        let toml_with_patch = r#"
+        let toml_schema_release = r#"
 template = "./template.json"
-        target_version = "1.14.5"
+target_version = "1.14.0-beta.2"
 
 [[subscriptions]]
 name = "Provider1"
 url = "https://example.com/sub1"
 "#;
-        let config = GeneratorConfig::from_toml(toml_with_patch).unwrap();
-        assert_eq!(config.target_version, "1.14.5");
+        let config = GeneratorConfig::from_toml(toml_schema_release).unwrap();
+        assert_eq!(config.target_version, "1.14.0-beta.2");
+        assert_eq!(config.resolved_target_version(), "1.14.0-beta.2");
         let version = config.get_target_version();
-        assert_eq!(version.patch, Some(5));
+        assert_eq!(version.patch, Some(0));
+
+        let toml_alias = r#"
+template = "./template.json"
+target_version = "1.14"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml_alias).unwrap();
+        assert_eq!(config.target_version, "1.14");
+        assert_eq!(config.resolved_target_version(), "1.14.0-beta.2");
+        assert!(crate::config::schema::is_alias(&config.target_version));
+    }
+
+    #[test]
+    fn test_rejects_unbundled_schema_release() {
+        let toml = r#"
+template = "./template.json"
+target_version = "1.14.0-beta.3"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let error = GeneratorConfig::from_toml(toml).unwrap_err().to_string();
+        assert!(error.contains("No bundled schema"));
+        assert!(error.contains("1.14.0-beta.2"));
+
+        let stable_toml = toml.replace("1.14.0-beta.3", "1.14.0");
+        let error = GeneratorConfig::from_toml(&stable_toml)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No bundled schema"));
     }
 
     #[test]
@@ -805,7 +1025,7 @@ url = "https://example.com/sub1"
     #[test]
     fn test_default_target_version() {
         let config = GeneratorConfig::from_toml(MINIMAL_GENERATOR_TOML).unwrap();
-        assert_eq!(config.target_version, "1.14");
+        assert_eq!(config.target_version, "1.14.0-beta.2");
         let version = config.get_target_version();
         assert_eq!(version, SingBoxVersion::latest());
     }

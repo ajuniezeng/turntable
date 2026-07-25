@@ -15,6 +15,7 @@ use crate::config::shared::{CertificateProvider, HttpClient};
 
 pub mod certificate;
 pub mod dns;
+pub mod document;
 pub mod endpoint;
 pub mod experimental;
 pub mod inbound;
@@ -23,6 +24,8 @@ pub mod network_namespace;
 pub mod ntp;
 pub mod outbound;
 pub mod route;
+pub mod schema;
+pub mod semantic;
 pub mod serde_helpers;
 pub mod service;
 pub mod shared;
@@ -37,6 +40,12 @@ pub mod version;
 /// or if set to their default values.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SingBoxConfig {
+    /// JSON Schema URI used by compatible editors (since 1.14.0-beta.2).
+    ///
+    /// This field does not affect sing-box runtime behavior.
+    #[serde(default, rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+
     /// Log configuration
     #[serde(default, skip_serializing_if = "is_default_log")]
     pub log: Log,
@@ -136,6 +145,12 @@ impl SingBoxConfigBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the JSON Schema URI advertised by the configuration.
+    pub fn schema(mut self, schema: impl Into<String>) -> Self {
+        self.config.schema = Some(schema.into());
+        self
     }
 
     /// Set log configuration
@@ -270,6 +285,20 @@ mod tests {
         let config = SingBoxConfig::default();
         let json = config.to_json().unwrap();
         assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn test_singbox_config_schema_uri_roundtrip() {
+        let config = SingBoxConfig::builder()
+            .schema(crate::config::schema::SCHEMA_URI)
+            .build();
+        let json = config.to_json().unwrap();
+        let parsed = SingBoxConfig::from_json(&json).unwrap();
+
+        assert_eq!(
+            parsed.schema.as_deref(),
+            Some(crate::config::schema::SCHEMA_URI)
+        );
     }
 
     #[test]
