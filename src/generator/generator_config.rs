@@ -170,6 +170,11 @@ impl GeneratorConfig {
             .map_or_else(|| self.target_version.trim(), |bundle| bundle.release())
     }
 
+    /// Return whether this target is accepted only for legacy compatibility.
+    pub fn is_target_version_deprecated(&self) -> bool {
+        self.get_target_version().is_deprecated()
+    }
+
     /// Load generator config from file path
     pub async fn from_file(path: &Path) -> Result<Self> {
         let content = tokio::fs::read_to_string(path)

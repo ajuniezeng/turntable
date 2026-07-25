@@ -64,6 +64,13 @@ impl Generator {
     /// Run the generation process
     pub async fn generate(&self) -> Result<SingBoxDocument> {
         info!("Starting config generation");
+        if self.config.is_target_version_deprecated() {
+            warn!(
+                target = self.config.resolved_target_version(),
+                minimum = %SingBoxVersion::minimum_non_deprecated(),
+                "Target sing-box version is deprecated in Turntable; migrate to a maintained target"
+            );
+        }
         if crate::config::schema::is_alias(&self.config.target_version) {
             warn!(
                 target = self.config.target_version,
@@ -881,6 +888,7 @@ url = "https://example.com/sub1"
 "#;
         let config = GeneratorConfig::from_toml(toml_1_10).unwrap();
         assert_eq!(config.target_version, "1.10");
+        assert!(config.is_target_version_deprecated());
         let version = config.get_target_version();
         assert_eq!(version.major, 1);
         assert_eq!(version.minor, 10);
@@ -895,6 +903,7 @@ url = "https://example.com/sub1"
 "#;
         let config = GeneratorConfig::from_toml(toml_1_11).unwrap();
         assert_eq!(config.target_version, "1.11");
+        assert!(config.is_target_version_deprecated());
 
         let toml_1_12 = r#"
 template = "./template.json"
@@ -906,6 +915,19 @@ url = "https://example.com/sub1"
 "#;
         let config = GeneratorConfig::from_toml(toml_1_12).unwrap();
         assert_eq!(config.target_version, "1.12");
+        assert!(config.is_target_version_deprecated());
+
+        let toml_1_13 = r#"
+template = "./template.json"
+target_version = "1.13"
+
+[[subscriptions]]
+name = "Provider1"
+url = "https://example.com/sub1"
+"#;
+        let config = GeneratorConfig::from_toml(toml_1_13).unwrap();
+        assert_eq!(config.target_version, "1.13");
+        assert!(!config.is_target_version_deprecated());
 
         let toml_schema_release = r#"
 template = "./template.json"
@@ -917,6 +939,7 @@ url = "https://example.com/sub1"
 "#;
         let config = GeneratorConfig::from_toml(toml_schema_release).unwrap();
         assert_eq!(config.target_version, "1.14.0-beta.2");
+        assert!(!config.is_target_version_deprecated());
         assert_eq!(config.resolved_target_version(), "1.14.0-beta.2");
         let version = config.get_target_version();
         assert_eq!(version.patch, Some(0));

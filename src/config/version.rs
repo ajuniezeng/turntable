@@ -13,8 +13,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 // Version Constants
 // ============================================================================
 
-/// Minimum supported sing-box version (last three major versions)
+/// Minimum sing-box version still accepted during the legacy transition.
 pub const MIN_SUPPORTED_VERSION: (u32, u32) = (1, 10);
+
+/// Oldest sing-box version that is not deprecated by Turntable.
+///
+/// Versions between [`MIN_SUPPORTED_VERSION`] and this boundary remain
+/// available temporarily, but only receive the legacy typed validation path.
+pub const MIN_NON_DEPRECATED_VERSION: (u32, u32) = (1, 13);
 
 /// Latest supported sing-box version
 pub const LATEST_VERSION: (u32, u32) = (1, 14);
@@ -66,9 +72,23 @@ impl SingBoxVersion {
         Self::new(MIN_SUPPORTED_VERSION.0, MIN_SUPPORTED_VERSION.1)
     }
 
+    /// Get the oldest target version that is not deprecated.
+    pub fn minimum_non_deprecated() -> Self {
+        Self::new(MIN_NON_DEPRECATED_VERSION.0, MIN_NON_DEPRECATED_VERSION.1)
+    }
+
     /// Check if this version is supported (within the supported range).
     pub fn is_supported(&self) -> bool {
         self.major == 1 && self.minor >= MIN_SUPPORTED_VERSION.1 && self.minor <= LATEST_VERSION.1
+    }
+
+    /// Check whether Turntable still accepts this target only for transition.
+    ///
+    /// Deprecated targets retain their existing compatibility checks, but do
+    /// not receive the schema-backed validation introduced for newer releases.
+    pub fn is_deprecated(&self) -> bool {
+        self.is_supported()
+            && self.below(MIN_NON_DEPRECATED_VERSION.0, MIN_NON_DEPRECATED_VERSION.1)
     }
 
     /// Compare versions (ignoring patch).
@@ -682,6 +702,20 @@ mod tests {
         let v = SingBoxVersion::minimum();
         assert_eq!(v.major, MIN_SUPPORTED_VERSION.0);
         assert_eq!(v.minor, MIN_SUPPORTED_VERSION.1);
+    }
+
+    #[test]
+    fn test_version_deprecation_boundary() {
+        let minimum = SingBoxVersion::minimum_non_deprecated();
+        assert_eq!(minimum.major, MIN_NON_DEPRECATED_VERSION.0);
+        assert_eq!(minimum.minor, MIN_NON_DEPRECATED_VERSION.1);
+
+        assert!(SingBoxVersion::new(1, 10).is_deprecated());
+        assert!(SingBoxVersion::new(1, 11).is_deprecated());
+        assert!(SingBoxVersion::new(1, 12).is_deprecated());
+        assert!(!SingBoxVersion::new(1, 13).is_deprecated());
+        assert!(!SingBoxVersion::new(1, 14).is_deprecated());
+        assert!(!SingBoxVersion::new(1, 9).is_deprecated());
     }
 
     #[test]

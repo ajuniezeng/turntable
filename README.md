@@ -26,7 +26,10 @@ A Rust command-line tool for generating [sing-box](https://sing-box.sagernet.org
   - Subscription caching with configurable TTL
   - Diff view between cached and new subscriptions
 
-- **Version Compatibility**: Target sing-box 1.10 - 1.14. The latest target is validated against the official 1.14.0-beta.2 JSON Schema.
+- **Version Compatibility**: Target sing-box 1.10 - 1.14. Versions
+  1.10 - 1.12 are deprecated, 1.13 remains on the legacy typed validation
+  path, and exact 1.14 releases are validated against their official JSON
+  Schema.
 
 - **Lossless Templates**: Preserve schema-supported template fields even when
   Turntable does not yet expose a typed Rust model for them
@@ -95,7 +98,7 @@ template = "./templates/1.14.json"
 # Output file path
 output = "./out/config.json"
 
-# Exact schema-backed sing-box release.
+# Exact schema-backed sing-box release. Targets below 1.13 are deprecated.
 target_version = "1.14.0-beta.2"
 
 # IPv4-only mode: remove IPv6 outbounds and set DNS strategy to ipv4_only
@@ -241,7 +244,19 @@ cargo clippy
 
 ### Version Compatibility Goals
 
-Continuously track sing-box releases and update validation rules.
+Turntable is transitioning from hand-maintained version checks to the official
+schema shipped with each sing-box release:
+
+- **1.10 - 1.12 (deprecated)**: accepted temporarily with the existing typed
+  compatibility checks. New schema coverage and feature work will not be added.
+- **1.13 (maintained legacy)**: supported with typed compatibility and semantic
+  checks until it enters the deprecation phase.
+- **1.14 (schema-backed)**: select an exact bundled release to receive official
+  structural validation plus Turntable's cross-reference and semantic checks.
+
+Support for versions below 1.13 is planned for removal after sing-box 1.14
+stable is released. Deprecating 1.13 will be a later, separately announced
+step.
 
 ## License
 

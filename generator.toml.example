@@ -11,6 +11,7 @@ output = "./out/config.json"
 ipv4_only = false
 
 # Exact schema-backed sing-box release. `1.14` remains a temporary alias.
+# Targets 1.10 through 1.12 are deprecated and will be removed in a future release.
 target_version = "1.14.0-beta.2"
 
 # Enable country code outbound selectors. Turntable will generate selectors based on country flags from outbound tags and insert these selectors to existing selectors from template, default to true
