@@ -3,6 +3,7 @@
 //! These tests focus on the schema additions and behavioral surface introduced
 //! in sing-box 1.14.
 
+use turntable::config::SingBoxConfig;
 use turntable::config::dns::{DnsRule, DnsRuleAction, QueryType, RCode, TaggedDnsRuleAction};
 use turntable::config::inbound::Inbound;
 use turntable::config::outbound::Outbound;
@@ -11,7 +12,62 @@ use turntable::config::shared::{
     CertificateProvider, CertificateProviderRef, HttpClient, HttpClientRef,
 };
 use turntable::config::version::SingBoxVersion;
-use turntable::config::SingBoxConfig;
+
+#[test]
+fn test_reports_nested_unknown_fields_with_paths() {
+    let json = r#"{
+      "outbounds": [{"type":"direct","tag":"direct","future_option":true}],
+      "future_top_level": {"enabled":true}
+    }"#;
+
+    let (_config, unknown) =
+        turntable::config::unknown_fields::from_json::<SingBoxConfig>(json).unwrap();
+
+    assert!(
+        unknown.contains(&"outbounds.0.future_option".to_string()),
+        "reported paths: {unknown:?}"
+    );
+    assert!(unknown.contains(&"future_top_level".to_string()));
+}
+
+#[test]
+fn test_parse_latest_alpha44_configuration_roundtrip() {
+    let json = r#"{
+      "network_namespaces": [{"type":"unshare","tag":"sandbox","user":true}],
+      "dns": {
+        "timeout":"4s",
+        "servers":[{"type":"mdns","tag":"mdns","interface":"en0"}],
+        "rules":[{"preferred_by":"mdns","action":"route","server":"mdns","timeout":"2s"}]
+      },
+      "inbounds":[
+        {"type":"tun","tag":"tun-in","dns_mode":"hijack","dns_address":["172.19.0.2"],"netns":"sandbox"},
+        {"type":"snell","tag":"snell-in","listen_port":8388,"version":5,"users":[{"password":"secret"}]},
+        {"type":"hysteria2","tag":"hy2-in","realm":{"server":"realm.example","ip_version":4,"port_mapping":true},"obfs":{"type":"gecko","password":"x","min_packet_size":512,"max_packet_size":1200}}
+      ],
+      "outbounds":[
+        {"type":"bridge","tag":"bridge-out","bind_interface":"en0"},
+        {"type":"snell","tag":"snell-out","server":"proxy.example","server_port":443,"version":5,"psk":"secret"},
+        {"type":"ssh","tag":"ssh-out","server":"ssh.example","cipher":["aes128-gcm@openssh.com"],"mac":["hmac-sha2-256"],"kex_algorithm":["curve25519-sha256"]}
+      ],
+      "endpoints":[{"type":"tailscale","tag":"ts","ssh_server":{"enabled":true,"disable_sftp":true}}],
+      "services":[
+        {"type":"api","tag":"api","listen":"127.0.0.1","listen_port":9090,"dashboard":{"enabled":true}},
+        {"type":"hysteria-realm","tag":"realm","listen_port":443},
+        {"type":"usbip-server","tag":"usb-server","devices":[{"vendor_id":4660}]},
+        {"type":"usbip-client","tag":"usb-client","server":"127.0.0.1"}
+      ],
+      "route":{"rules":[{"action":{"action":"route-options","tls_spoof":true,"tls_spoof_method":"wrong-ack"}},{"action":{"action":"resolve","timeout":"3s"}}]}
+    }"#;
+
+    let config = SingBoxConfig::from_json(json).expect("latest 1.14 alpha config should parse");
+    let output: serde_json::Value = serde_json::from_str(&config.to_json().unwrap()).unwrap();
+
+    assert_eq!(output["network_namespaces"][0]["user"], true);
+    assert_eq!(output["services"][0]["dashboard"]["enabled"], true);
+    assert_eq!(output["outbounds"][0]["type"], "bridge");
+    assert_eq!(output["inbounds"][2]["obfs"]["type"], "gecko");
+    assert_eq!(output["route"]["rules"][1]["action"]["timeout"], "3s");
+}
 
 #[test]
 fn test_parse_dns_optimistic_true_shorthand() {
@@ -726,11 +782,23 @@ fn test_validation_warns_on_114_features_for_older_target() {
     assert!(features.iter().any(|f| f == "http_clients"));
     assert!(features.iter().any(|f| f == "route.default_http_client"));
     assert!(features.iter().any(|f| f.contains("accept_search_domain")));
-    assert!(features.iter().any(|f| f == "certificate_provider.http_client"));
-    assert!(features.iter().any(|f| f.contains("http_client") && f.contains("rule_set")));
+    assert!(
+        features
+            .iter()
+            .any(|f| f == "certificate_provider.http_client")
+    );
+    assert!(
+        features
+            .iter()
+            .any(|f| f.contains("http_client") && f.contains("rule_set"))
+    );
     assert!(features.iter().any(|f| f.contains("tls.spoof")));
     assert!(features.iter().any(|f| f.contains("tls.engine")));
-    assert!(features.iter().any(|f| f.contains("tuic") && f.contains("QUIC tuning")));
+    assert!(
+        features
+            .iter()
+            .any(|f| f.contains("tuic") && f.contains("QUIC tuning"))
+    );
 }
 
 #[test]

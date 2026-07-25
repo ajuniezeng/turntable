@@ -82,6 +82,16 @@ pub enum Inbound {
     /// TProxy inbound (Linux only)
     #[serde(rename = "tproxy")]
     TProxy(TProxyInbound),
+    /// Snell proxy inbound (since 1.14.0-alpha.38).
+    Snell(OpenInbound),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct OpenInbound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(flatten)]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -773,6 +783,10 @@ pub struct Hysteria2Inbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obfs: Option<Hysteria2Obfs>,
 
+    /// NAT traversal realm configuration (since 1.14.0-alpha.22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<serde_json::Value>,
+
     /// Hysteria2 users
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<NamedUser>,
@@ -816,6 +830,11 @@ pub struct Hysteria2Obfs {
     /// Obfuscation password
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_packet_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_packet_size: Option<u32>,
 }
 
 /// VLESS inbound configuration
@@ -935,6 +954,18 @@ pub struct TunInbound {
     /// Maximum transmission unit
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtu: Option<u32>,
+
+    /// Platform DNS handling mode (since 1.14.0-alpha.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_mode: Option<String>,
+
+    /// Addresses used by TUN DNS hijacking (since alpha.21).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns_address: Vec<String>,
+
+    /// Network namespace tag (since alpha.43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub netns: Option<String>,
 
     /// Set default route to TUN
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1460,6 +1491,7 @@ mod tests {
             obfs: Some(Hysteria2Obfs {
                 obfs_type: Some("salamander".to_string()),
                 password: Some("obfs_password".to_string()),
+                ..Default::default()
             }),
             users: vec![NamedUser {
                 name: Some("user1".to_string()),

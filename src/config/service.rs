@@ -31,6 +31,23 @@ pub enum Service {
     /// Shadowsocks Server Management API (since 1.12.0)
     #[serde(rename = "ssm-api")]
     SsmApi(Box<SsmApiService>),
+    /// Remote-control API service (since 1.14.0-alpha.30).
+    Api(Box<OpenService>),
+    /// Hysteria2 NAT traversal rendezvous service (since alpha.22).
+    HysteriaRealm(Box<OpenService>),
+    /// USB/IP device exporter (since alpha.32).
+    UsbipServer(Box<OpenService>),
+    /// USB/IP device importer (since alpha.32).
+    UsbipClient(Box<OpenService>),
+}
+
+/// Forward-compatible service payload.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct OpenService {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(flatten)]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================

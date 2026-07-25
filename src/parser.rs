@@ -19,10 +19,11 @@ pub use protocols::{
 };
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::config::outbound::Outbound;
+use crate::config::unknown_fields::from_json_with_warnings;
 
 // ============================================================================
 // Subscription Parser Trait
@@ -46,15 +47,17 @@ impl SubscriptionParser for SingBoxJsonParser {
     }
 
     fn parse(&self, content: &str, _registry: &ProtocolRegistry) -> Result<Vec<Outbound>> {
-        #[derive(Deserialize)]
+        #[derive(Deserialize, Serialize)]
         struct SingBoxSubscription {
             #[serde(default)]
             outbounds: Vec<Outbound>,
         }
 
         debug!("Parsing Sing-box JSON subscription");
-        let subscription: SingBoxSubscription = serde_json::from_str(content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse Sing-box JSON subscription: {}", e))?;
+        let subscription: SingBoxSubscription =
+            from_json_with_warnings(content, "sing-box subscription").map_err(|e| {
+                anyhow::anyhow!("Failed to parse Sing-box JSON subscription: {}", e)
+            })?;
 
         debug!(
             "Sing-box JSON parsing complete: {} outbounds found",

@@ -88,6 +88,7 @@ impl ProtocolParser for Hysteria2Parser {
                 Some(Hysteria2Obfs {
                     obfs_type: Some(obfs_type.clone()),
                     password: params.get("obfs-password").cloned(),
+                    ..Default::default()
                 })
             }
         });
@@ -102,6 +103,7 @@ impl ProtocolParser for Hysteria2Parser {
             up_mbps: params.get("up").and_then(|s| s.parse().ok()),
             down_mbps: params.get("down").and_then(|s| s.parse().ok()),
             obfs,
+            realm: None,
             password: if password.is_empty() {
                 None
             } else {

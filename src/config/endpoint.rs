@@ -193,6 +193,10 @@ pub struct TailscaleEndpoint {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub system_interface_mtu: u32,
 
+    /// Tailscale SSH server settings (since 1.14.0-alpha.27).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_server: Option<serde_json::Value>,
+
     /// UDP NAT expiration time (default: "5m")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_timeout: Option<String>,

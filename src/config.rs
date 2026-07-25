@@ -6,6 +6,7 @@ use crate::config::endpoint::Endpoint;
 use crate::config::experimental::Experimental;
 use crate::config::inbound::Inbound;
 use crate::config::log::Log;
+use crate::config::network_namespace::NetworkNamespace;
 use crate::config::ntp::Ntp;
 use crate::config::outbound::Outbound;
 use crate::config::route::Route;
@@ -18,12 +19,14 @@ pub mod endpoint;
 pub mod experimental;
 pub mod inbound;
 pub mod log;
+pub mod network_namespace;
 pub mod ntp;
 pub mod outbound;
 pub mod route;
 pub mod serde_helpers;
 pub mod service;
 pub mod shared;
+pub mod unknown_fields;
 pub mod validation;
 pub mod version;
 
@@ -62,6 +65,10 @@ pub struct SingBoxConfig {
     /// [`HttpClientRef::Tag`][crate::config::shared::HttpClientRef::Tag].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub http_clients: Vec<HttpClient>,
+
+    /// Linux network namespaces (since sing-box 1.14.0-alpha.43).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_namespaces: Vec<NetworkNamespace>,
 
     /// Endpoint configurations (since 1.11.0)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -115,7 +122,7 @@ impl SingBoxConfig {
 
     /// Deserialize a configuration from a JSON string
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+        unknown_fields::from_json_with_warnings(json, "sing-box configuration")
     }
 }
 

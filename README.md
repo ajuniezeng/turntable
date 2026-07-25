@@ -26,7 +26,7 @@ A Rust command-line tool for generating [sing-box](https://sing-box.sagernet.org
   - Subscription caching with configurable TTL
   - Diff view between cached and new subscriptions
 
-- **Version Compatibility**: Target specific sing-box versions (1.10 - 1.14) with automatic feature validation
+- **Version Compatibility**: Target specific sing-box versions (1.10 - 1.14, including 1.14.0-alpha.44 features) with automatic feature validation
 
 - **Cloud Upload**: Automatically upload generated configs to WebDAV-compatible storage
 

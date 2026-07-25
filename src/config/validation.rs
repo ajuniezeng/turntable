@@ -828,9 +828,7 @@ impl SingBoxConfig {
         if version < &SingBoxVersion::new(1, 14) {
             for provider in &self.certificate_providers {
                 let has_http_client = match provider {
-                    crate::config::shared::CertificateProvider::Acme(p) => {
-                        p.http_client.is_some()
-                    }
+                    crate::config::shared::CertificateProvider::Acme(p) => p.http_client.is_some(),
                     crate::config::shared::CertificateProvider::Tailscale(p) => {
                         p.http_client.is_some()
                     }
@@ -1383,10 +1381,7 @@ impl SingBoxConfig {
                     && ts.accept_search_domain
                 {
                     result.add_warning(ConfigWarning::UnsupportedFeature {
-                        feature: format!(
-                            "tailscale DNS server '{}' accept_search_domain",
-                            ts.tag
-                        ),
+                        feature: format!("tailscale DNS server '{}' accept_search_domain", ts.tag),
                         min_version: "1.14".to_string(),
                         target_version: version_str.to_string(),
                     });
@@ -1616,11 +1611,7 @@ impl SingBoxConfig {
             }
             DnsRule::Logical(logical) => {
                 for nested_rule in &logical.rules {
-                    self.check_dns_rule_114_deprecations(
-                        nested_rule,
-                        version_str,
-                        result,
-                    );
+                    self.check_dns_rule_114_deprecations(nested_rule, version_str, result);
                 }
             }
         }
@@ -1644,11 +1635,7 @@ impl SingBoxConfig {
             }
             DnsRule::Logical(logical) => {
                 for nested_rule in &logical.rules {
-                    self.check_dns_rule_114_incompatibilities(
-                        nested_rule,
-                        rule_index,
-                        result,
-                    );
+                    self.check_dns_rule_114_incompatibilities(nested_rule, rule_index, result);
                 }
             }
         }
@@ -1926,6 +1913,7 @@ fn get_outbound_tag(outbound: &Outbound) -> Option<String> {
         Outbound::Selector(o) => o.tag.clone(),
         Outbound::UrlTest(o) => o.tag.clone(),
         Outbound::Naive(o) => o.tag.clone(),
+        Outbound::Bridge(o) | Outbound::Snell(o) => o.tag.clone(),
     }
 }
 
@@ -1949,9 +1937,12 @@ fn get_outbound_detour(outbound: &Outbound) -> Option<String> {
         Outbound::Ssh(o) => o.dial.detour.clone(),
         Outbound::Naive(o) => o.dial.detour.clone(),
         // These don't have dial fields
-        Outbound::Block(_) | Outbound::Dns(_) | Outbound::Selector(_) | Outbound::UrlTest(_) => {
-            None
-        }
+        Outbound::Block(_)
+        | Outbound::Dns(_)
+        | Outbound::Selector(_)
+        | Outbound::UrlTest(_)
+        | Outbound::Bridge(_)
+        | Outbound::Snell(_) => None,
     }
 }
 
@@ -1960,6 +1951,7 @@ fn get_dns_server_tag(server: &DnsServer) -> String {
     match server {
         DnsServer::Legacy(s) => s.tag.clone(),
         DnsServer::Local(s) => s.tag.clone(),
+        DnsServer::Mdns(s) => s.tag.clone(),
         DnsServer::Hosts(s) => s.tag.clone(),
         DnsServer::Tcp(s) => s.tag.clone(),
         DnsServer::Udp(s) => s.tag.clone(),
@@ -2994,6 +2986,7 @@ mod tests {
                         disable_cache: false,
                         rewrite_ttl: None,
                         client_subnet: None,
+                        timeout: None,
                     }),
                 })],
                 ..Default::default()

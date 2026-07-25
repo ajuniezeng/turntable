@@ -35,13 +35,15 @@ pub fn get_outbound_server(outbound: &Outbound) -> Option<&str> {
         Outbound::AnyTls(o) => o.server.as_deref(),
         Outbound::Ssh(o) => o.server.as_deref(),
         Outbound::Naive(o) => o.server.as_deref(),
+        Outbound::Snell(o) => o.options.get("server").and_then(|v| v.as_str()),
         // These don't have server fields
         Outbound::Direct(_)
         | Outbound::Block(_)
         | Outbound::Dns(_)
         | Outbound::Selector(_)
         | Outbound::UrlTest(_)
-        | Outbound::Tor(_) => None,
+        | Outbound::Tor(_)
+        | Outbound::Bridge(_) => None,
     }
 }
 
@@ -107,9 +109,12 @@ pub fn get_outbound_detour(outbound: &Outbound) -> Option<&str> {
         Outbound::Ssh(o) => o.dial.detour.as_deref(),
         Outbound::Naive(o) => o.dial.detour.as_deref(),
         // These don't have dial fields
-        Outbound::Block(_) | Outbound::Dns(_) | Outbound::Selector(_) | Outbound::UrlTest(_) => {
-            None
-        }
+        Outbound::Block(_)
+        | Outbound::Dns(_)
+        | Outbound::Selector(_)
+        | Outbound::UrlTest(_)
+        | Outbound::Bridge(_)
+        | Outbound::Snell(_) => None,
     }
 }
 
@@ -187,9 +192,12 @@ pub fn set_outbound_detour(outbound: &mut Outbound, detour: &str) -> bool {
             true
         }
         // These don't have dial fields
-        Outbound::Block(_) | Outbound::Dns(_) | Outbound::Selector(_) | Outbound::UrlTest(_) => {
-            false
-        }
+        Outbound::Block(_)
+        | Outbound::Dns(_)
+        | Outbound::Selector(_)
+        | Outbound::UrlTest(_)
+        | Outbound::Bridge(_)
+        | Outbound::Snell(_) => false,
     }
 }
 
@@ -395,6 +403,7 @@ pub fn get_outbound_tag(outbound: &Outbound) -> Option<&str> {
         Outbound::Selector(o) => o.tag.as_deref(),
         Outbound::UrlTest(o) => o.tag.as_deref(),
         Outbound::Naive(o) => o.tag.as_deref(),
+        Outbound::Bridge(o) | Outbound::Snell(o) => o.tag.as_deref(),
     }
 }
 

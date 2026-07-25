@@ -43,6 +43,10 @@ pub struct Dns {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optimistic: Option<OptimisticCache>,
 
+    /// Default DNS query timeout (since 1.14.0-alpha.19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+
     /// Store reverse mapping of IP addresses for domain lookup during routing
     #[serde(default, skip_serializing_if = "is_false")]
     pub reverse_mapping: bool,
@@ -143,6 +147,10 @@ pub enum DnsServer {
     /// Local DNS server (system resolver)
     Local(LocalDnsServer),
 
+    /// Multicast DNS server (since 1.14.0-alpha.21).
+    #[serde(rename = "mdns")]
+    Mdns(OpenDnsServer),
+
     /// Hosts file based DNS server
     Hosts(HostsDnsServer),
 
@@ -176,6 +184,13 @@ pub enum DnsServer {
 
     /// Resolved DNS server
     Resolved(ResolvedDnsServer),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct OpenDnsServer {
+    pub tag: String,
+    #[serde(flatten)]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 /// Legacy DNS server configuration (deprecated in 1.12.0)
@@ -215,6 +230,10 @@ pub struct LocalDnsServer {
     /// When enabled, local DNS server will resolve DNS by dialing itself whenever possible (since 1.13.0)
     #[serde(default, skip_serializing_if = "is_false")]
     pub prefer_go: bool,
+
+    /// Suffixes resolved using neighbor discovery (since alpha.21).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbor_domain: Vec<String>,
 
     #[serde(flatten)]
     pub dial: DialFields,
@@ -525,6 +544,14 @@ pub struct DefaultDnsRule {
     /// Match network type (tcp or udp)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
+
+    /// Match preferred names reported by DNS servers (since alpha.21).
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "string_or_vec"
+    )]
+    pub preferred_by: Vec<String>,
 
     /// Match authenticated user
     #[serde(
@@ -918,6 +945,9 @@ pub struct LegacyRouteAction {
     /// Client subnet for this query
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// Tagged DNS rule action with explicit `action` field
@@ -952,6 +982,7 @@ impl Default for DnsRuleAction {
             disable_cache: false,
             rewrite_ttl: None,
             client_subnet: None,
+            timeout: None,
         })
     }
 }
@@ -981,6 +1012,9 @@ pub struct RouteAction {
     /// Client subnet for this query
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// Evaluate action for DNS rules (since 1.14.0).
@@ -1004,6 +1038,9 @@ pub struct EvaluateAction {
     /// Client subnet for this query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// Route options action for DNS rules
@@ -1024,6 +1061,9 @@ pub struct RouteOptionsAction {
     /// Client subnet for this query
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// Reject action for DNS rules

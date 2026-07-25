@@ -764,6 +764,10 @@ pub struct AcmeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
 
+    /// ACME certificate profile, including IP address profiles (since alpha.16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+
     /// PEM-encoded private key of an existing ACME account (since 1.14.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_key: Option<String>,

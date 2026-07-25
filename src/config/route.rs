@@ -960,6 +960,14 @@ pub struct RouteOptionsAction {
     /// Fragment TLS into multiple records (since 1.12.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_record_fragment: Option<String>,
+
+    /// Enable per-rule TLS ClientHello spoofing (since 1.14.0-alpha.21).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tls_spoof: bool,
+
+    /// Per-rule TLS spoof method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_spoof_method: Option<String>,
 }
 
 /// Sniff action - performs protocol sniffing.
@@ -1019,6 +1027,10 @@ pub struct ResolveAction {
     /// EDNS client subnet (since 1.12.0)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_subnet: Option<String>,
+
+    /// Override the DNS query timeout (since 1.14.0-alpha.19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 impl ResolveAction {

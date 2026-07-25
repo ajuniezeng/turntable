@@ -67,6 +67,19 @@ pub enum Outbound {
     UrlTest(UrlTestOutbound),
     /// NaiveProxy outbound
     Naive(NaiveOutbound),
+    /// L3 bridge outbound (since 1.14.0-alpha.40).
+    Bridge(OpenOutbound),
+    /// Snell proxy outbound (since 1.14.0-alpha.38).
+    Snell(OpenOutbound),
+}
+
+/// Forward-compatible payload for newly added outbound protocols.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct OpenOutbound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(flatten)]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -900,6 +913,10 @@ pub struct Hysteria2Outbound {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obfs: Option<Hysteria2Obfs>,
 
+    /// NAT traversal realm configuration (since 1.14.0-alpha.22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<serde_json::Value>,
+
     /// Authentication password
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
@@ -939,6 +956,14 @@ pub struct Hysteria2Obfs {
     /// Obfuscation password
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+
+    /// Minimum gecko packet size (since 1.14.0-alpha.26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_packet_size: Option<u32>,
+
+    /// Maximum gecko packet size (since 1.14.0-alpha.26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_packet_size: Option<u32>,
 }
 
 /// AnyTLS outbound configuration
@@ -1047,6 +1072,13 @@ pub struct SshOutbound {
     /// Client version string
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_version: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cipher: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mac: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kex_algorithm: Vec<String>,
 
     /// Dial fields
     #[serde(flatten)]
@@ -1528,6 +1560,7 @@ mod tests {
             obfs: Some(Hysteria2Obfs {
                 obfs_type: Some("salamander".to_string()),
                 password: Some("obfs_password".to_string()),
+                ..Default::default()
             }),
             ..Default::default()
         };
